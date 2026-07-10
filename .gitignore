@@ -1,0 +1,68 @@
+# ============================================================
+# MagicTwin · .gitignore
+# ============================================================
+
+# ---------- 依赖 ----------
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# ---------- 运行时产物 ----------
+tasks/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ---------- 环境与密钥 ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials
+agent-config.json
+
+# ---------- 用户私有数据（含个人画像，绝不提交） ----------
+# workspace/users/u_local/twin/profile.md 是用户个人画像，含真实身份/OKR/偏好
+# 新用户请从 profile.example.md 复制并自行编辑
+workspace/users/u_local/twin/profile.md
+
+# ---------- Agent 进化记忆（运行时由每日进化自动生成，不纳入版本库） ----------
+# memory/LEARNINGS.md 与 memory/daily/ 由 engine/evolve.js 归纳任务对话产出，
+# 属于运行时记忆，各部署环境独立，不进 Git（如需共享经验可手动复制）。
+workspace/agents/*/memory/
+workspace/users/*/twin/memory/
+
+# ---------- 操作系统 ----------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ---------- 编辑器 / IDE ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# ---------- 构建产物 ----------
+dist/
+build/
+.cache/
+*.tsbuildinfo
+
+# ---------- 其他 ----------
+coverage/
+.nyc_output/
+*.pid
+*.seed
+*.pid.lock

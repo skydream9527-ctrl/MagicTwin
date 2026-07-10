@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>过程产物与日志 · Agent 协作工作空间</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">📄</span>
+      <div>
+        <div class="title">过程产物与日志</div>
+        <div class="subtitle" id="sub">加载中…</div>
+      </div>
+    </div>
+    <div class="status-area">
+      <span id="taskStatus" class="badge hidden"></span>
+      <a class="link" href="/" onclick="window.close();return false;">✕ 关闭</a>
+    </div>
+  </header>
+
+  <div class="art-wrap">
+    <div class="art-goal" id="goal"></div>
+    <div class="tabs">
+      <div class="tab active" data-t="art">过程产物</div>
+      <div class="tab" data-t="log">完整日志</div>
+      <div class="tab" data-t="think">Agent 思考过程</div>
+    </div>
+    <div id="pane-art" class="tabpane active"></div>
+    <div id="pane-log" class="tabpane"></div>
+    <div id="pane-think" class="tabpane"></div>
+  </div>
+
+  <script src="/artifacts.js"></script>
+</body>
+</html>

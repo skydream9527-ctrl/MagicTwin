@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent 详情 · Agent 协作工作空间</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" id="agentLogo">◆</span>
+      <div>
+        <div class="title" id="agentName">Agent 详情</div>
+        <div class="subtitle" id="agentTagline">加载中…</div>
+      </div>
+    </div>
+    <div class="status-area">
+      <span class="chip" id="agentModel"></span>
+      <a class="link" href="/" onclick="window.close();return false;">✕ 关闭</a>
+    </div>
+  </header>
+
+  <div class="agent-wrap">
+    <section class="agent-hero" id="agentHero"></section>
+
+    <div class="agent-files-head">
+      <span class="dot conv"></span> 相关文件
+      <span class="hint">人设 Prompt、取数知识库、技能包 —— 点击左侧文件在右侧查看内容</span>
+    </div>
+
+    <div class="agent-body">
+      <aside class="file-list" id="fileList"></aside>
+      <section class="file-view" id="fileView">
+        <div class="empty">选择左侧文件查看内容</div>
+      </section>
+    </div>
+  </div>
+
+  <script src="/agent.js"></script>
+</body>
+</html>

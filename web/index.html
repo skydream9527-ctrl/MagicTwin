@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent 协作工作空间 · Twin + 数据 + 样式 Agent</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand" id="brand" role="button" tabindex="0" title="返回首页" onclick="goHome()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();goHome()}">
+      <span class="logo">◆</span>
+      <div>
+        <div class="title">Agent 协作工作空间</div>
+        <div class="subtitle">你、数字分身 Twin、数据分析 Agent、样式优化 Agent —— 同一个对话区里协作</div>
+      </div>
+    </div>
+    <div class="status-area">
+      <span id="taskStatus" class="badge hidden"></span>
+      <span id="healthLLM" class="chip">LLM …</span>
+      <span id="healthDataQuery" class="chip">数据查询 …</span>
+      <button id="homeBtn" class="ghost hidden" onclick="goHome()">🏠 首页</button>
+      <button id="sideToggle" class="ghost hidden">💬 私聊栏</button>
+      <button id="artifactsBtn" class="ghost hidden">📄 过程产物与日志</button>
+      <button id="newTaskBtn" class="ghost hidden">＋ 新任务</button>
+    </div>
+  </header>
+
+  <!-- 首页（左：Agent 导航栏 · 右：新任务 + 历史画廊）-->
+  <section id="startScreen" class="home">
+    <!-- 左侧栏：Agent 团队 + 配置入口 -->
+    <aside class="home-side">
+      <div class="side-sec-h">你的 Agent 团队</div>
+      <div class="home-agents" id="homeAgents"></div>
+      <a class="side-cfg link" href="/config.html">⚙️ 配置模型</a>
+    </aside>
+
+    <!-- 主区：新任务入口 + 历史任务画廊 -->
+    <main class="home-main">
+      <div class="home-hero">
+        <h1>数据产品 AI 协作工作区</h1>
+        <p class="lead">说出一个数据分析目标，你的数字分身 Twin 会带着数据分析 Agent、样式优化 Agent 替你把事情做完：真实查数、分析归因、排版交付。</p>
+      </div>
+
+      <section class="home-card">
+        <div class="home-card-h"><span class="hc-ico">✍️</span> 布置新任务</div>
+        <textarea id="goalInput" rows="3" placeholder="例如：看看内容中心最近一周消费时长有没有异常，帮我定位下"></textarea>
+        <div class="starters" id="starters"></div>
+        <div class="new-task-foot">
+          <div class="use-models">
+            <span class="um-label">本次使用</span>
+            <span class="um-chip" id="um-twin">Twin …</span>
+            <span class="um-chip" id="um-data">数据 …</span>
+            <span class="um-chip" id="um-style">样式 …</span>
+          </div>
+          <button id="startBtn" class="primary">交给 Twin ▸</button>
+        </div>
+      </section>
+
+      <div class="home-block-h"><span>历史任务</span><span class="hint">点击卡片可回溯</span></div>
+      <div class="home-history" id="historyList"><div class="muted">加载中…</div></div>
+    </main>
+  </section>
+
+  <!-- 工作空间：主对话区（左） + 与 Twin 私聊副对话区（右），并列常驻 -->
+  <main id="workspace" class="workspace hidden">
+    <!-- 主对话区 -->
+    <section class="ws-main">
+      <div class="goal-bar">
+        <span class="goal-label">目标</span>
+        <span id="goalText"></span>
+      </div>
+      <div id="agentStrip" class="agent-strip"></div>
+      <div class="conv-head">
+        <span class="dot conv"></span> 主对话区 · 协作
+        <span class="hint">你 · Twin · 数据 Agent · 样式 Agent 连续对话；确认项 / 代答 / 真实查询 / 排版 / 打回 都在这里发生</span>
+      </div>
+      <div id="feed" class="feed"></div>
+      <div id="composer" class="composer">
+        <select id="injectTarget" title="选择插话对象">
+          <option value="twin">@ Twin</option>
+          <option value="data">@ 数据 Agent</option>
+          <option value="style">@ 样式 Agent</option>
+        </select>
+        <input id="injectInput" placeholder="随时插话：@ 某个 Agent 补充要求、纠偏或回复升级问题…" />
+        <button id="injectSend" class="primary">发送</button>
+      </div>
+    </section>
+
+    <!-- 副对话区：与 Twin 私聊（问进度 / 问它替你做了啥），不打断主编排 -->
+    <aside id="sidePanel" class="side-panel">
+      <div class="side-h">
+        <span class="dot" style="background:var(--twin)"></span> 副对话区 · 与 Twin 私聊
+      </div>
+      <div class="side-sub">只和你的分身单聊：问进度、问它替你做了哪些决定，不打断主流程</div>
+      <div id="sideFeed" class="side-feed"></div>
+      <div class="side-composer">
+        <input id="sideInput" placeholder="问 Twin：进度到哪了？" />
+        <button id="sideSend" class="primary">问</button>
+      </div>
+    </aside>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

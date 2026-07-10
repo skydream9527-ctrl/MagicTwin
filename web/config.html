@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent 配置 · Agent 协作工作空间</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand" role="button" tabindex="0" title="返回首页" onclick="location.href='/'" onkeydown="if(event.key==='Enter'){location.href='/'}">
+      <span class="logo">⚙️</span>
+      <div>
+        <div class="title">Agent 配置</div>
+        <div class="subtitle">为每个 Agent 选择模型，选择会被记住</div>
+      </div>
+    </div>
+    <div class="status-area">
+      <span class="chip" id="healthLLM">LLM …</span>
+      <a class="link" href="/">← 返回首页</a>
+    </div>
+  </header>
+
+  <div class="cfg-wrap">
+    <div class="cfg-intro">选择每个 Agent 使用的大模型。<b>保存后新任务默认使用这里的配置</b>；已创建的历史任务仍保留其创建时的模型。带「推荐」的模型已实测可稳定输出 JSON。</div>
+    <div id="cfgList" class="cfg-list"></div>
+    <div class="cfg-actions">
+      <button id="saveBtn" class="primary">保存配置</button>
+      <span id="saveMsg" class="save-msg"></span>
+    </div>
+  </div>
+
+  <script src="/config.js"></script>
+</body>
+</html>
