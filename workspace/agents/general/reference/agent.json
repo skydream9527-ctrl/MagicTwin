@@ -1,0 +1,45 @@
+{
+  "id": "general",
+  "name": "通用 Agent",
+  "paradigm": "open",
+  "icon": "🤖",
+  "color": "#8a8a8a",
+  "description": "自由对话 · 跨范式多工具编排 · 入口编排者，优先派单给更专业的子 agent",
+  "user_friendly_description": "不确定找谁？直接问我就行。我会判断你的问题适合哪个专业Agent，帮你派给最合适的去做，复杂任务我来编排协调",
+  "use_cases": ["不确定该用哪个Agent时的入口", "需要多个Agent协作完成的复杂任务", "简单问答和文件操作"],
+  "starters": [
+    "帮我看看最近的核心指标有没有异常",
+    "帮我分析一下这组数据的趋势",
+    "帮我生成一份周报",
+    "对比一下最近两个版本的核心指标"
+  ],
+  "tags": ["入口", "智能派单", "多Agent协作"],
+  "output_type": "根据任务类型自动选择：文字回答 / 数据报告 / 分析图表",
+  "publish_status": "published",
+  "prompt_layout": "v3",
+  "tools": [
+    "now",
+    "echo",
+    "query_data",
+    "write_file",
+    "read_file",
+    "list_files",
+    "read_skill",
+    "memory_save",
+    "memory_delete",
+    "task_state_save",
+    "todo_write",
+    "exit_plan_mode",
+    "spawn_subagent",
+    "spawn_parallel",
+    "run_background"
+  ],
+  "model": null,
+  "spawn_targets": ["*"],
+  "skills": [],
+  "features": {
+    "spawn_subagent": true,
+    "todo_write": true,
+    "exit_plan_mode": true
+  }
+}

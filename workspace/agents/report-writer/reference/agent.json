@@ -1,0 +1,23 @@
+{
+  "id": "report-writer",
+  "name": "报告撰写 Agent",
+  "paradigm": "write",
+  "icon": "📝",
+  "color": "#2ecc71",
+  "description": "基于数据产出分析报告、周报、项目总结。",
+  "publish_status": "published",
+  "prompt_layout": "v3",
+  "tools": [
+    "write_file",
+    "template_render",
+    "read_file"
+  ],
+  "model": null,
+  "spawn_targets": [],
+  "skills": [],
+  "features": {
+    "todo_write": true,
+    "exit_plan_mode": false,
+    "spawn_subagent": false
+  }
+}

@@ -30,15 +30,15 @@
 ---
 # 各业务线取数知识（表名/列名/口径，务必据此写 SQL）
 
-## 【业务线A】{{KNOWLEDGE_CC}}
+## 【业务线A】{{KNOWLEDGE_A}}
 
-## 【业务线B】{{KNOWLEDGE_BM}}
+## 【业务线B】{{KNOWLEDGE_B}}
 
-## 【业务线C】{{KNOWLEDGE_BF}}
+## 【业务线C】{{KNOWLEDGE_C}}
 
-## 【业务线D】{{KNOWLEDGE_SR}}
+## 【业务线D】{{KNOWLEDGE_D}}
 
-## 【业务线E】{{KNOWLEDGE_NV}}
+## 【业务线E】{{KNOWLEDGE_E}}
 
 ---
 # 输出协议（极其重要）

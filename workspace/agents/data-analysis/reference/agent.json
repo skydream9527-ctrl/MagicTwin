@@ -1,0 +1,44 @@
+{
+  "id": "data-analysis",
+  "name": "数据分析 Agent",
+  "paradigm": "data",
+  "icon": "📊",
+  "color": "#6baa8e",
+  "description": "NL→SQL · SQL 执行 · Python 沙箱(预测/STL/变点/拟合) · 8 分析范式 · 自动出报告。通用数据分析能力，可接入任意数据源。",
+  "user_friendly_description": "帮你用自然语言查数据、做分析、出报告。你只需要说想看什么，我来写SQL查数、用Python做统计和可视化，最终输出一份完整的分析报告",
+  "use_cases": ["用自然语言查询业务数据", "指标趋势分析和异常定位", "自动生成带图表的分析报告"],
+  "starters": [
+    "帮我看一下最近7天的核心指标趋势",
+    "对比本周和上周的关键数据，按维度拆解看看哪个变化最大",
+    "最近30天的留存率是多少，按新老用户分开看",
+    "预测一下下个月的DAU走势"
+  ],
+  "tags": ["SQL查询", "数据分析", "可视化", "自动报告"],
+  "output_type": "数据表格 + 趋势图表 + 分析报告",
+  "publish_status": "published",
+  "prompt_layout": "v3",
+  "tools": [
+    "now",
+    "query_data",
+    "execute_python",
+    "write_file",
+    "read_file",
+    "list_files",
+    "read_skill",
+    "memory_save",
+    "memory_delete",
+    "task_state_save",
+    "todo_write",
+    "exit_plan_mode",
+    "spawn_subagent",
+    "spawn_parallel"
+  ],
+  "model": null,
+  "spawn_targets": [],
+  "skills": [],
+  "features": {
+    "todo_write": true,
+    "exit_plan_mode": true,
+    "spawn_subagent": true
+  }
+}

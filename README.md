@@ -246,7 +246,13 @@ node server/jobs/evolve.js 2026-07-08
 │   └── prompts/                # 三个 Agent 的 system prompt 加载器（读 workspace 下的 agent.md）
 ├── web/                         # 工作空间主界面（原生 HTML/CSS/JS，零构建，SSE）
 ├── workspace/
-│   ├── agents/data-analysis/    # 数据分析 Agent 人设与知识
+│   ├── agents/
+│   │   ├── data-analysis/       # 数据分析 Agent（人设 + 知识 + 8 范式 + SOP）
+│   │   ├── style-optimizer/     # 样式优化 Agent
+│   │   ├── general/             # 通用 Agent（入口编排者）
+│   │   ├── code-runner/         # 代码执行 Agent（Python 沙箱）
+│   │   ├── report-writer/       # 报告撰写 Agent
+│   │   └── data-monitor/        # 数据监控 Agent
 │   └── users/u_local/twin/      # Twin 操作手册（agent.md）+ 用户画像（profile.md gitignore / profile.example.md）
 ├── docs/                        # 设计理念与构想
 ├── .github/                     # Issue / PR 模板、dependabot
@@ -271,7 +277,7 @@ node server/jobs/evolve.js 2026-07-08
 
 **二期（规划中）**
 
-- Python 沙箱跑高级分析（STL / 变点 / 预测 / 置信区间）
+- 扩展 Agent 编排集成（通用 Agent 路由 / Python 沙箱 / 报告生成 / 指标监控）
 - 数据源适配器抽象（DuckDB / SQLite / 自定义）
 - 记忆晋升、多任务看板等平台级能力
 

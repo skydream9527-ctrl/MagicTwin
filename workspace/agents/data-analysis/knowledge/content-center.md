@@ -1,7 +1,7 @@
 # 业务线A · 取数知识（示例模板）
 
 > 本文件是「业务线A」的取数知识模板。请替换为你自己的真实表名、列名和口径定义。
-> 运行时会被注入到数据分析 Agent 的 system prompt 中（见 `agent.md` 的 `{{KNOWLEDGE_CC}}` 占位符）。
+> 运行时会被注入到数据分析 Agent 的 system prompt 中（见 `agent.md` 的 `{{KNOWLEDGE_A}}` 占位符）。
 
 ## 主表
 - 表名：`your_catalog.your_db.dm_table_a_di`

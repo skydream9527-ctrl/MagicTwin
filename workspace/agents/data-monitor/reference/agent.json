@@ -1,0 +1,30 @@
+{
+  "id": "data-monitor",
+  "name": "数据监控 Agent",
+  "paradigm": "monitor",
+  "icon": "🔔",
+  "color": "#e67e22",
+  "description": "定时检测关注指标异常，触发告警推送。配置监控规则后自动按 cron 执行 SQL 检测，超阈值时推送告警。",
+  "publish_status": "published",
+  "prompt_layout": "v3",
+  "tools": [
+    "now",
+    "query_data",
+    "execute_python",
+    "write_file",
+    "read_file",
+    "list_files",
+    "send_notification",
+    "read_skill",
+    "read_agent_knowledge",
+    "todo_write"
+  ],
+  "model": null,
+  "spawn_targets": [],
+  "skills": [],
+  "features": {
+    "todo_write": true,
+    "exit_plan_mode": false,
+    "spawn_subagent": false
+  }
+}

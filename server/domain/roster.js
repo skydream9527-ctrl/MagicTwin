@@ -84,6 +84,91 @@ export const ROSTER = [
       { path: "workspace/agents/style-optimizer/memory/LEARNINGS.md", title: "进化经验（LEARNINGS）", group: "进化记忆", desc: "每日自动归纳的排版经验 / 易错点，运行时注入 system prompt（尚未进化则暂缺）" },
     ],
   },
+  // ---- 扩展 Agent（可按需接入编排） ----
+
+  {
+    key: "general",
+    kind: "tool",
+    name: "通用 Agent",
+    icon: "🤖",
+    color: "general",
+    tagline: "入口编排者（智能路由）",
+    space: "workspace/agents/general",
+    role: "入口编排者：判断用户意图，路由到最合适的子 Agent；简单问题自己处理。",
+    responsibilities: [
+      "判断用户意图类型",
+      "路由到 data-analysis / code-runner / report-writer / data-monitor",
+      "简单问题自己处理",
+      "复杂任务先 plan 再执行",
+    ],
+    boundary: "不替用户做不可逆决策；数据类结论必须基于子 Agent 的真实结果。",
+    files: [
+      { path: "workspace/agents/general/agent.md", title: "通用 Agent 操作手册", group: "人设 Prompt", desc: "入口编排 + 路由规则 + 边界" },
+    ],
+  },
+
+  {
+    key: "code-runner",
+    kind: "tool",
+    name: "代码执行 Agent",
+    icon: "🐍",
+    color: "code",
+    tagline: "Python 沙箱（高级分析）",
+    space: "workspace/agents/code-runner",
+    role: "在沙盒中运行 Python 数据脚本（pandas/sklearn/prophet），支持 STL、变点检测、预测等高级分析。",
+    responsibilities: [
+      "执行 Python 数据脚本",
+      "STL 周期剥离 / 变点检测",
+      "时间序列预测（prophet）",
+      "生成图表 PNG",
+    ],
+    boundary: "只在沙盒中执行；不直接查数据库；不替用户做决策。",
+    files: [
+      { path: "workspace/agents/code-runner/agent.md", title: "代码执行 Agent 操作手册", group: "人设 Prompt", desc: "沙箱执行 + 可用技能" },
+    ],
+  },
+
+  {
+    key: "report-writer",
+    kind: "tool",
+    name: "报告撰写 Agent",
+    icon: "📝",
+    color: "report",
+    tagline: "报告生成（周报/总结）",
+    space: "workspace/agents/report-writer",
+    role: "基于数据产出分析报告、周报、项目总结。",
+    responsibilities: [
+      "根据数据和分析结论生成结构化报告",
+      "套用报告模板",
+      "生成周报 / 例行复盘",
+      "项目总结",
+    ],
+    boundary: "只做报告生成；不查数据；不改分析结论。",
+    files: [
+      { path: "workspace/agents/report-writer/agent.md", title: "报告撰写 Agent 操作手册", group: "人设 Prompt", desc: "报告生成 + 模板渲染" },
+    ],
+  },
+
+  {
+    key: "data-monitor",
+    kind: "tool",
+    name: "数据监控 Agent",
+    icon: "🔔",
+    color: "monitor",
+    tagline: "指标监控 + 异常告警",
+    space: "workspace/agents/data-monitor",
+    role: "定时执行 SQL 检测指标异常，超阈值时触发告警推送。",
+    responsibilities: [
+      "按预设 SQL 查询指标当前值",
+      "与基线/阈值对比判断异常",
+      "触发告警并生成告警摘要",
+      "记录检测结果",
+    ],
+    boundary: "只做监控和告警；不做修复操作；不主动修改数据。",
+    files: [
+      { path: "workspace/agents/data-monitor/agent.md", title: "数据监控 Agent 操作手册", group: "人设 Prompt", desc: "监控 SOP + 告警格式 + 边界" },
+    ],
+  },
 ];
 
 export const AGENT_KEYS = ROSTER.map((a) => a.key);

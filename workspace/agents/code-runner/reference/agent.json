@@ -1,0 +1,24 @@
+{
+  "id": "code-runner",
+  "name": "代码执行 Agent",
+  "paradigm": "execute",
+  "icon": "🐍",
+  "color": "#3776ab",
+  "description": "在沙盒中运行 Python 数据脚本（pandas/sklearn/prophet），支持高级统计分析。",
+  "publish_status": "published",
+  "prompt_layout": "v3",
+  "tools": [
+    "run_user_code",
+    "pip_install",
+    "write_file",
+    "read_file"
+  ],
+  "model": null,
+  "spawn_targets": [],
+  "skills": [],
+  "features": {
+    "todo_write": false,
+    "exit_plan_mode": false,
+    "spawn_subagent": false
+  }
+}
