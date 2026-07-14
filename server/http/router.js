@@ -16,6 +16,7 @@
 import { CONFIG, RECOMMENDED_MODELS } from "../config.js";
 import { hasKey, listModels } from "../integrations/llm.js";
 import { hasRealBackend } from "../integrations/data-query.js";
+import { isSandboxEnabled } from "../integrations/sandbox.js";
 import { createTask, getMeta, readEvents, readDecisions, readThinking, listTasks, getAgentConfig, saveAgentConfig } from "../domain/store.js";
 import { getAgentList, getAgentDetail } from "../domain/agents.js";
 import { ROSTER, AGENT_KEYS } from "../domain/roster.js";
@@ -40,7 +41,12 @@ export async function handleRequest(req, res) {
   const path = url.split("?")[0];
 
   if (path === "/api/health" && method === "GET") {
-    return sendJson(res, 200, { hasKey: hasKey(), models: CONFIG.models, dataQuery: { backend: CONFIG.dataQuery.backend, real: hasRealBackend() } });
+    return sendJson(res, 200, {
+      hasKey: hasKey(),
+      models: CONFIG.models,
+      dataQuery: { backend: CONFIG.dataQuery.backend, real: hasRealBackend() },
+      sandbox: { enabled: isSandboxEnabled() },
+    });
   }
   if (path === "/api/models" && method === "GET") {
     const all = await listModels();

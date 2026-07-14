@@ -16,6 +16,7 @@
 //         JSON 解析容错 + 多次重试。每次 LLM 调用的 reasoning + 原始输出写入思考日志。
 import { chat } from "../integrations/llm.js";
 import { runQuery } from "../integrations/data-query.js";
+import { runPython } from "../integrations/sandbox.js";
 import { CONFIG } from "../config.js";
 import { appendEvent, appendDecision, appendThinking, updateMeta, writeState, getMeta, readDecisions, readEvents, saveSql, saveData } from "../domain/store.js";
 import { buildTwinSystem } from "../prompts/twin.js";
@@ -129,6 +130,14 @@ function toolResultText(name, res) {
     return `【查询结果 ${name}】成功：${res.rowCount} 行，${res.ms}ms。列：${res.columns.join(", ")}${more}\n数据(JSON)：${JSON.stringify(sample)}`;
   }
   return `【查询失败 ${name}】${res.error}（code=${res.code}）。请阅读报错、修正 SQL 后作为新的 query 重试；不要重复同样的错误。`;
+}
+function codeResultText(name, res) {
+  if (res.ok) {
+    const out = (res.stdout || "").slice(0, 4000);
+    const err = (res.stderr || "").slice(0, 1500);
+    return `【代码执行结果 ${name}】成功（${res.ms}ms）。\nstdout:\n${out || "(无输出)"}${err ? `\nstderr(警告/提示):\n${err}` : ""}`;
+  }
+  return `【代码执行失败 ${name}】${res.error}（code=${res.code}）。\n${res.stderr ? `stderr:\n${(res.stderr || "").slice(0, 2500)}` : ""}\n请阅读报错、修正代码后作为新的 execute 重试；不要重复同样的错误。`;
 }
 
 /**
@@ -321,13 +330,18 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
           msgs.push({ role: "user", content: toolResultText(qn, res) });
           turn = key; // 继续自己跑
         } else if (a.type === "execute" && caps.includes("execute")) {
-          // 代码沙箱：P1 待实现，这里给一个明确的错误回喂，避免死循环
-          // TODO: 接入 server/integrations/sandbox.js（runPython(code)）后替换这段
+          // 代码沙箱：通过 server/integrations/sandbox.js 执行 Python
+          // 未配置时 runPython 会返回明确的 SANDBOX_DISABLED 错误，Agent 据此改用 query 或直接 report
           const en = (a.name || `E${steps}`).replace(/[^\w.\-]/g, "_");
           emit({ actor: key, kind: "tool_call", channel: "main", text: a.purpose || "执行代码", code: a.code, name: en, lang: "python" });
-          const fake = { ok: false, error: "代码沙箱尚未配置（SANDBOX_NOT_IMPLEMENTED）。请在 server/integrations/sandbox.js 接入后启用 execute 能力。", code: "SANDBOX_NOT_IMPLEMENTED", ms: 0 };
-          emit({ actor: "system", kind: "tool_result", channel: "main", name: en, ok: false, error: fake.error, code: fake.code, ms: 0 });
-          msgs.push({ role: "user", content: `【代码执行失败 ${en}】${fake.error}（code=${fake.code}）。请改用 query 或直接 report 当前结论。` });
+          const res = await runPython(a.code || "");
+          emit({
+            actor: "system", kind: "tool_result", channel: "main", name: en, ok: res.ok, ms: res.ms,
+            stdout: res.ok ? (res.stdout || "").slice(0, 8000) : undefined,
+            stderr: (res.stderr || "").slice(0, 4000),
+            error: res.error, code: res.code, lang: "python",
+          });
+          msgs.push({ role: "user", content: codeResultText(en, res) });
           turn = key;
         } else if (a.type === "ask") {
           emit({ actor: key, kind: "ask", channel: "main", to: "twin", text: a.message || "", questions: a.questions || [] });

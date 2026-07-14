@@ -296,7 +296,9 @@ function answerCard(d) {
 function toolCard(d, actor = "data") {
   const meta = AGENT_META[actor] || { name: actor, icon: "■" };
   const c = el("div", "card tool"); c.dataset.name = d.name || "";
-  const actionLabel = d.lang === "python" || d.code ? "代码执行" : "真实查询";
+  const isCode = d.lang === "python" || (!!d.code && !d.sql);
+  if (isCode) c.dataset.isCode = "1";
+  const actionLabel = isCode ? "代码执行" : "真实查询";
   c.innerHTML = `<div class="card-h">🔧 ${esc(meta.name)} ${actionLabel} · ${esc(d.name || "")}</div>
     <div class="card-b"><div class="purpose">${esc(d.text || "")}</div>
     <div class="sqlmini">${esc(d.sql || d.code || "")}</div>
@@ -307,11 +309,36 @@ function attachToolResult(d) {
   let target = null;
   $("#feed").querySelectorAll(".card.tool").forEach((c) => { if (c.dataset.name === d.name) target = c; });
   const metaEl = target ? target.querySelector(".rmeta") : null;
+  // Python 代码执行结果 vs SQL 查询结果：根据是否有 lang=python 区分渲染
+  const isCode = d.lang === "python" || (target && target.dataset.isCode === "1");
   if (metaEl) {
-    if (d.ok) { metaEl.className = "rmeta ok"; metaEl.innerHTML = `✅ 成功 · ${d.rowCount} 行 · ${d.ms}ms · 真实数据已入库（详情见「过程产物与日志」）`; }
-    else { metaEl.className = "rmeta err"; metaEl.innerHTML = `⚠ 失败：${esc(d.error || "")}（${esc(d.code || "")}）— Agent 将据此修正`; }
+    if (d.ok) {
+      metaEl.className = "rmeta ok";
+      if (isCode) {
+        metaEl.innerHTML = `✅ 执行成功 · ${d.ms}ms`;
+        // 把 stdout 附在卡片下方
+        if (d.stdout) {
+          const pre = document.createElement("pre");
+          pre.className = "code-out";
+          pre.textContent = d.stdout;
+          target.querySelector(".card-b").appendChild(pre);
+        }
+      } else {
+        metaEl.innerHTML = `✅ 成功 · ${d.rowCount} 行 · ${d.ms}ms · 真实数据已入库（详情见「过程产物与日志」）`;
+      }
+    } else {
+      metaEl.className = "rmeta err";
+      metaEl.innerHTML = `⚠ 失败：${esc(d.error || "")}（${esc(d.code || "")}）— Agent 将据此修正`;
+      if (isCode && d.stderr) {
+        const pre = document.createElement("pre");
+        pre.className = "code-out err";
+        pre.textContent = d.stderr;
+        target.querySelector(".card-b").appendChild(pre);
+      }
+    }
   } else {
-    add(sysBubble(d.ok ? `查询 ${d.name} 成功 ${d.rowCount} 行` : `查询 ${d.name} 失败：${d.error}`));
+    if (isCode) add(sysBubble(d.ok ? `代码 ${d.name} 执行成功 (${d.ms}ms)` : `代码 ${d.name} 执行失败：${d.error}`));
+    else add(sysBubble(d.ok ? `查询 ${d.name} 成功 ${d.rowCount} 行` : `查询 ${d.name} 失败：${d.error}`));
   }
   $("#feed").scrollTop = $("#feed").scrollHeight;
 }

@@ -227,6 +227,9 @@ a.link:hover { text-decoration: underline; }
 .tool .rmeta { font-size: 11.5px; color: var(--muted); }
 .tool .rmeta.err { color: var(--danger); }
 .tool .rmeta.ok { color: var(--ok); }
+/* 代码沙箱执行结果输出（stdout / stderr） */
+.tool .code-out { font-family: var(--mono); font-size: 11px; background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 9px 10px; white-space: pre-wrap; max-height: 220px; overflow: auto; margin-top: 8px; }
+.tool .code-out.err { background: #2a0f0f; color: #fecaca; }
 
 /* ===================== 报告 / 交付 / 升级 ===================== */
 .report.msg { max-width: 88%; }
