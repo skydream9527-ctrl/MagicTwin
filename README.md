@@ -422,6 +422,9 @@ node server/jobs/evolve.js 2026-07-08
 **v1（已实现）**
 
 - 真 LLM 三人设 + 真实 Twin ⇄ 数据 Agent ⇄ 样式 Agent 有界协作闭环
+- **花名册驱动的多 Agent 编排**：新增 Agent 只需在 `roster.js` 登记一条 + 放一份 `agent.md`，编排引擎、前端 UI、模型配置自动可用（不再需要改 orchestrator/router/app.js 任何分支）
+- **统一协作协议**：星型拓扑 + 收敛动作集 + 基于能力的访问控制（query / execute 权限按 Agent 声明放量）
+- **代码执行沙箱**：`code-runner` Agent 的 `execute` 能力真实落地——`server/integrations/sandbox.js` 通过子进程跑 Python，带超时 / 输出截断 / 资源隔离建议；默认禁用，开发环境用 `SANDBOX_ENABLED=1 + SANDBOX_PYTHON=python3`，生产环境用 `SANDBOX_COMMAND` 接 Docker（`--network=none --memory=512m --cpus=1`）
 - 可配置数据查询（默认演示模式，可接入真实数据源）
 - 确认项代答 / 打回 / 升级 / 排版 / 交付 + 「我替你做的决定」清单
 - 用户随时 @ 任一 Agent 插话、侧栏私聊 Twin 问进度
@@ -431,10 +434,10 @@ node server/jobs/evolve.js 2026-07-08
 
 **二期（规划中）**
 
-- **扩展 Agent 编排集成**：通用 Agent 路由 / Python 沙箱（STL / 变点 / 预测 / 置信区间）/ 报告生成 / 指标监控
+- **扩展 Agent 能力深化**：通用 Agent 智能路由上线 / `report-writer` 周报模板 / `data-monitor` 异常告警接入通知系统
 - **从「星型汇报」到「多 Agent 对话」**：在 Twin 主持下开放受控的「有界群聊」——允许两个 Agent 就某个子问题直接对话几轮，Twin 旁听、随时叫停、最终裁决
 - **工作空间概念深化**：支持多个工作空间（个人 / 团队 / 项目），每个有自己的 Agent 花名册、知识库、任务看板，可切换、可共享、可归档
-- **目录结构的交叉设计**：记忆按用户分区 + 团队共享，一条经验要贡献给团队需显式晋升（候选 → 审批 → 晋升的闭环）
+- **记忆晋升闭环**：过程记忆自动落任务层；值得长期保留的走「候选 → 审批 → 晋升」跨层（用户 / Agent-by-user / Agent-team / 项目 / 团队），从结构上杜绝一次对话污染所有人未来
 - **数据源适配器抽象**：DuckDB / SQLite / 自定义
 - **Mac 端本机分身**：从网页 Demo 进化为本机常驻的数字分身
 
@@ -446,6 +449,7 @@ node server/jobs/evolve.js 2026-07-08
 
 - **LLM key 只在服务端解析与使用**，不下发到浏览器。
 - **取数白名单只读**：从工具层杜绝写操作（`SELECT` / `WITH...SELECT` only）。
+- **代码沙箱默认禁用**：`SANDBOX_ENABLED` 未显式设为 `1` 时，`code-runner` 的 `execute` 调用返回 `SANDBOX_DISABLED`，编排自动改用 `query` 路径；启用后建议用 Docker 隔离（`--network=none` 禁网 + `--memory/--cpus` 限额），代码通过 stdin 传入避免命令注入，强制超时 30s。
 - **用户画像绝不进 Git**：`workspace/users/u_local/twin/profile.md` 已在 `.gitignore`，请勿 `git add -f`。
 - `tasks/`、`node_modules/`、`.env` 等已在 `.gitignore` 中，不进版本库。
 
