@@ -18,6 +18,7 @@ import { hasKey, listModels } from "../integrations/llm.js";
 import { hasRealBackend } from "../integrations/data-query.js";
 import { createTask, getMeta, readEvents, readDecisions, readThinking, listTasks, getAgentConfig, saveAgentConfig } from "../domain/store.js";
 import { getAgentList, getAgentDetail } from "../domain/agents.js";
+import { ROSTER, AGENT_KEYS } from "../domain/roster.js";
 import { runTwinInquiry } from "../engine/orchestrator.js";
 import { rt, peek, ssePush, enqueueInjection, startOrchestration } from "./runtime.js";
 import { serveStatic } from "./static.js";
@@ -39,11 +40,11 @@ export async function handleRequest(req, res) {
   const path = url.split("?")[0];
 
   if (path === "/api/health" && method === "GET") {
-    return sendJson(res, 200, { hasKey: hasKey(), models: { twin: CONFIG.twinModel, data: CONFIG.dataModel, style: CONFIG.styleModel }, dataQuery: { backend: CONFIG.dataQuery.backend, real: hasRealBackend() } });
+    return sendJson(res, 200, { hasKey: hasKey(), models: CONFIG.models, dataQuery: { backend: CONFIG.dataQuery.backend, real: hasRealBackend() } });
   }
   if (path === "/api/models" && method === "GET") {
     const all = await listModels();
-    return sendJson(res, 200, { recommended: RECOMMENDED_MODELS, all, defaults: { twin: CONFIG.twinModel, data: CONFIG.dataModel, style: CONFIG.styleModel } });
+    return sendJson(res, 200, { recommended: RECOMMENDED_MODELS, all, defaults: CONFIG.models });
   }
   // Agent 详情：概览列表 + 单个 Agent 的元信息与关联文件（人设 Prompt / 知识库 / 技能包）
   if (path === "/api/agents" && method === "GET") {
@@ -56,14 +57,22 @@ export async function handleRequest(req, res) {
     return sendJson(res, 200, detail);
   }
   // Agent 模型配置（记忆）：GET 读当前配置（无文件则回退 CONFIG 默认），POST 保存
+  // 任意 roster 中登记的 Agent key 都可保存；新 Agent 自动可用。
   if (path === "/api/agent-config" && method === "GET") {
     const saved = getAgentConfig() || {};
-    return sendJson(res, 200, { twin: saved.twin || CONFIG.twinModel, data: saved.data || CONFIG.dataModel, style: saved.style || CONFIG.styleModel });
+    const merged = { ...CONFIG.models };
+    for (const k of AGENT_KEYS) if (saved[k]) merged[k] = saved[k];
+    return sendJson(res, 200, { config: merged, keys: AGENT_KEYS });
   }
   if (path === "/api/agent-config" && method === "POST") {
     const body = await readBody(req);
-    const s = saveAgentConfig({ twin: body.twin, data: body.data, style: body.style });
-    return sendJson(res, 200, { ok: true, config: { twin: s.twin || CONFIG.twinModel, data: s.data || CONFIG.dataModel, style: s.style || CONFIG.styleModel } });
+    // 只接受 roster 中登记的 key，避免脏数据
+    const next = {};
+    for (const k of AGENT_KEYS) {
+      if (typeof body[k] === "string" && body[k].trim()) next[k] = body[k].trim();
+    }
+    const s = saveAgentConfig(next);
+    return sendJson(res, 200, { ok: true, config: { ...CONFIG.models, ...s } });
   }
   if (path === "/api/tasks" && method === "GET") {
     return sendJson(res, 200, { tasks: listTasks() });
@@ -73,11 +82,17 @@ export async function handleRequest(req, res) {
     const goal = (body.goal || "").trim();
     if (!goal) return sendJson(res, 400, { error: "goal 不能为空" });
     if (!hasKey()) return sendJson(res, 503, { error: "LLM_KEY_NOT_CONFIGURED：未找到 LLM key" });
-    const models = {
-      twin: (body.twinModel || CONFIG.twinModel).trim(),
-      data: (body.dataModel || CONFIG.dataModel).trim(),
-      style: (body.styleModel || CONFIG.styleModel).trim(),
-    };
+    // 接受两种格式：
+    //   - 旧：{ twinModel, dataModel, styleModel }（向后兼容）
+    //   - 新：{ models: { <key>: <model> } }（推荐，支持任意 Agent）
+    const models = { ...CONFIG.models };
+    if (body.models && typeof body.models === "object") {
+      for (const k of AGENT_KEYS) if (body.models[k]) models[k] = body.models[k].trim();
+    }
+    // 旧字段覆盖
+    if (body.twinModel) models.twin = body.twinModel.trim();
+    if (body.dataModel) models.data = body.dataModel.trim();
+    if (body.styleModel) models.style = body.styleModel.trim();
     const meta = createTask(goal, models);
     rt(meta.tid).fresh = true; // 仅本进程新建的任务才允许启动编排
     return sendJson(res, 200, { tid: meta.tid });
@@ -103,13 +118,14 @@ export async function handleRequest(req, res) {
   }
 
   // 用户在主对话区 @ 某一方插话（补充要求 / 纠偏）
+  // to 可以是任意 roster 中登记的 Agent key（twin 或任一 tool agent）
   const mInject = path.match(/^\/api\/task\/([^/]+)\/inject$/);
   if (mInject && method === "POST") {
     const tid = mInject[1];
     const body = await readBody(req);
     const text = (body.text || "").trim();
     if (!text) return sendJson(res, 400, { error: "text 不能为空" });
-    const to = ["twin", "data", "style"].includes(body.to) ? body.to : "twin";
+    const to = AGENT_KEYS.includes(body.to) ? body.to : "twin";
     const r = peek(tid);
     if (!r || !r.started) return sendJson(res, 409, { error: "任务未在运行" });
     enqueueInjection(tid, { kind: "inject", to, text });

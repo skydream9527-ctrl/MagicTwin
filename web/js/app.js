@@ -1,23 +1,26 @@
 "use strict";
-// $ / el / esc 来自 shared/dom.js；renderMarkdown / mdInline 来自 shared/markdown.js；AGENT_ROSTER 来自 shared/roster.js（均以 classic script 先于本文件加载）
+// $ / el / esc 来自 shared/dom.js；renderMarkdown / mdInline 来自 shared/markdown.js；
+// AGENT_ROSTER / AGENT_KEYS / AGENT_META 来自 shared/roster.js（均以 classic script 先于本文件加载）
 
 const STARTERS = [
   "看看内容中心最近一周消费时长有没有异常，帮我定位下",
   "内容中心最近 7 天 DAU 趋势，跌了的话按体裁拆一下",
   "对比最近一周和上一周内容中心的人均消费时长",
 ];
-// @ 提及展示用的名称
-const TARGET_FULL = { twin: "Twin", data: "数据分析 Agent", style: "样式优化 Agent", user: "你" };
+// @ 提及展示用的名称：从 roster 派生，外加 "user"（你）这个虚拟 target
+const TARGET_FULL = Object.fromEntries(AGENT_ROSTER.map((a) => [a.key, a.name]));
+TARGET_FULL.user = "你";
 function atTag(to) { return `<span class="at ${to}">@${esc(TARGET_FULL[to] || to)}</span>`; }
 const ARROW = `<span class="arrow">→</span>`;
 
 let es = null;
 let curTid = null;
-let curModels = { twin: "", data: "", style: "" };
+// 当前任务的模型映射，键为 agent key（任意 roster 中的 Agent 都可能出现）
+let curModels = {};
 const pendingEcho = []; // 本地已乐观回显、等待服务端事件去重的插话 {to,text}
 
 // 记忆的 Agent 模型配置（来自 /api/agent-config，可在配置页修改）
-let curConfig = { twin: "", data: "", style: "" };
+let curConfig = {};
 
 // ---------- 初始化 ----------
 async function init() {
@@ -42,19 +45,41 @@ async function init() {
   $("#sideInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doInquiry(); });
 
   renderHomeAgents();
+  renderUseModelsChips();   // 「本次使用」chips：从 roster 动态生成
+  renderInjectTarget();     // @ 提及下拉：从 roster 动态生成
   await loadAgentConfig();
   loadHistory();
+}
+
+// 渲染首页「本次使用」模型 chips（动态从 roster 派生，避免硬编码 twin/data/style）
+function renderUseModelsChips() {
+  const box = $("#useModels"); if (!box) return;
+  box.innerHTML = AGENT_ROSTER.map((a) =>
+    `<span class="um-chip" id="um-${a.key}" title="${esc(a.name)} · 当前模型">${esc(shortName(a.name))} …</span>`
+  ).join("");
+}
+// 渲染工作区 @ 提及下拉（动态从 roster 派生）
+function renderInjectTarget() {
+  const sel = $("#injectTarget"); if (!sel) return;
+  sel.innerHTML = AGENT_ROSTER.map((a) =>
+    `<option value="${a.key}">@ ${esc(a.name)}</option>`
+  ).join("");
+}
+// 短名：去掉「Agent」/「· 数字分身」之类后缀，让 chip 文字更紧凑
+function shortName(name) {
+  return String(name).replace(/\s*·.*$/, "").replace(/\s*Agent$/, "").trim();
 }
 
 // 读取记忆的 Agent 模型配置，回填新任务区「本次使用」与首页 Agent 卡片
 async function loadAgentConfig() {
   try {
     const c = await (await fetch("/api/agent-config")).json();
-    curConfig = { twin: c.twin || "", data: c.data || "", style: c.style || "" };
+    // 后端返回 { config: {<key>:<model>}, keys: [...] }；兼容旧版直接平铺返回
+    curConfig = { ...(c.config || c) };
   } catch {}
-  const label = { twin: "Twin", data: "数据", style: "样式" };
-  ["twin", "data", "style"].forEach((k) => {
-    const chip = $("#um-" + k); if (chip) chip.textContent = `${label[k]} · ${shortModel(curConfig[k])}`;
+  // 回填首页 chips
+  AGENT_KEYS.forEach((k) => {
+    const chip = $("#um-" + k); if (chip) chip.textContent = `${shortName(AGENT_META[k].name)} · ${shortModel(curConfig[k])}`;
     const mdl = $("#ha-mdl-" + k); if (mdl) mdl.textContent = curConfig[k] || "默认";
   });
 }
@@ -89,10 +114,11 @@ function fmtWhen(iso) { try { const d = new Date(iso); const p = (n) => String(n
 async function start() {
   const goal = $("#goalInput").value.trim();
   if (!goal) return;
-  const models = { twin: curConfig.twin, data: curConfig.data, style: curConfig.style };
+  // 把当前记忆的所有 Agent 模型配置作为本次任务的模型映射传给后端
+  const models = { ...curConfig };
   $("#startBtn").disabled = true;
   try {
-    const r = await (await fetch("/api/task", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ goal, twinModel: models.twin, dataModel: models.data, styleModel: models.style }) })).json();
+    const r = await (await fetch("/api/task", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ goal, models }) })).json();
     if (r.error) { alert(r.error); $("#startBtn").disabled = false; return; }
     curModels = { ...models };
     enterWorkspace(goal); connect(r.tid);
@@ -100,8 +126,8 @@ async function start() {
 }
 
 async function openTask(tid) {
-  let goal = "", models = { twin: "", data: "", style: "" };
-  try { const d = await (await fetch(`/api/task/${tid}`)).json(); goal = d.meta?.goal || ""; models = { ...models, ...(d.meta?.models || {}) }; } catch {}
+  let goal = "", models = {};
+  try { const d = await (await fetch(`/api/task/${tid}`)).json(); goal = d.meta?.goal || ""; models = { ...(d.meta?.models || {}) }; } catch {}
   curModels = models; enterWorkspace(goal); connect(tid);
 }
 
@@ -117,10 +143,10 @@ function enterWorkspace(goal) {
   $("#feed").innerHTML = "";
   $("#sideFeed").innerHTML = `<div class="muted" style="font-size:12.5px">在这里随时问 Twin：进度到哪了？你替我做了哪些决定？（不会打断主流程）</div>`;
   pendingEcho.length = 0;
-  $("#agentStrip").innerHTML =
-    agentCardHtml("twin", "◆", "Twin · 数字分身", curModels.twin) +
-    agentCardHtml("data", "📊", "数据分析 Agent", curModels.data) +
-    agentCardHtml("style", "✨", "样式优化 Agent", curModels.style);
+  // Agent 状态条：从 roster 动态渲染（任意 roster 中的 Agent 都自动出现）
+  $("#agentStrip").innerHTML = AGENT_ROSTER.map((a) =>
+    agentCardHtml(a.key, a.icon, a.name, curModels[a.key])
+  ).join("");
 }
 // 返回首页：断开当前任务的实时连接，平滑切回启动屏并刷新历史（比整页刷新体验更好）
 function goHome() {
@@ -139,7 +165,7 @@ function agentCardHtml(k, icon, name, model) {
 // 打开某个 Agent 的详情页（新标签：定位/职责/边界/模型 + 相关文件浏览）
 function openAgent(k) { window.open(`/agent.html?key=${encodeURIComponent(k)}`, "_blank"); }
 function setAgentStatus(k, text, active) { const e = $("#st-" + k); if (e) { e.textContent = text; e.className = "s" + (active ? " active" : ""); } }
-function resetAgents() { ["twin", "data", "style"].forEach((k) => setAgentStatus(k, "待命", false)); }
+function resetAgents() { AGENT_KEYS.forEach((k) => setAgentStatus(k, "待命", false)); }
 
 // ---------- SSE ----------
 function connect(tid) {
@@ -186,27 +212,29 @@ function handle(d) {
     return;
   }
 
-  // 主对话区状态灯
-  if (kind === "status" && d.transient) { if (["twin", "data", "style"].includes(actor)) setAgentStatus(actor, d.text, true); return; }
-  if (["twin", "data", "style"].includes(actor)) {
-    const querying = actor === "data" && kind === "tool_call"; // 查询已发起、结果未回，数据 Agent 仍在忙，别显示“待命”
+  // 主对话区状态灯：任何 roster 中的 Agent 都更新其状态条
+  if (kind === "status" && d.transient) { if (AGENT_KEYS.includes(actor)) setAgentStatus(actor, d.text, true); return; }
+  if (AGENT_KEYS.includes(actor)) {
+    const querying = kind === "tool_call"; // 查询/执行已发起、结果未回，该 Agent 仍在忙，别显示“待命”
     setAgentStatus(actor, querying ? "正在查询…" : "待命", querying);
   }
 
   if (actor === "user" && kind === "goal") return add(userBubble("你 · 目标", d.text));
   if (actor === "user" && kind === "reply") return add(injectBubble("twin", d.text, "回复"));
   if (actor === "user" && kind === "inject") { if (consumedByEcho(d.to, d.text)) return; return add(injectBubble(d.to, d.text)); }
-  if (actor === "twin" && kind === "assign") { setStatus("执行中"); return add(routedBubble("twin", "◆", "Twin", "data", "派发任务", d.text)); }
+  // Twin 的派活/回复/打回：to 字段是目标 Agent key（不再硬编码 "data"）
+  if (actor === "twin" && kind === "assign") { setStatus("执行中"); return add(routedBubble("twin", "◆", "Twin", d.to, "派发任务", d.text)); }
   if (actor === "twin" && kind === "answer") return add(answerCard(d));
-  if (actor === "twin" && kind === "rework") return add(routedBubble("twin", "◆", "Twin", "data", "打回重做", d.text));
-  if (actor === "twin" && kind === "beautify") return add(routedBubble("twin", "◆", "Twin", "style", "转交排版", d.text));
+  if (actor === "twin" && kind === "rework") return add(routedBubble("twin", "◆", "Twin", d.to, "打回重做", d.text));
+  if (actor === "twin" && kind === "beautify") return add(routedBubble("twin", "◆", "Twin", d.to || "style", "转交排版", d.text));
   if (actor === "twin" && kind === "deliver") { setStatus("已交付"); return add(deliverCard(d)); }
   if (actor === "twin" && kind === "escalate") { setStatus("待确认"); return add(escalateCard(d)); }
-  if (actor === "data" && kind === "ask") return add(confirmCard(d));
-  if (actor === "data" && kind === "tool_call") return add(toolCard(d));
+  // 任意工具 Agent 的 ask / tool_call / report / styled
+  if (AGENT_KEYS.includes(actor) && actor !== "twin" && kind === "ask") return add(confirmCard(d, actor));
+  if (AGENT_KEYS.includes(actor) && actor !== "twin" && kind === "tool_call") return add(toolCard(d, actor));
   if (actor === "system" && kind === "tool_result") return attachToolResult(d);
-  if (actor === "data" && kind === "report") return add(reportCard(d));
-  if (actor === "style" && kind === "styled") return add(styledCard(d));
+  if (AGENT_KEYS.includes(actor) && actor !== "twin" && kind === "report") return add(reportCard(d, actor));
+  if (AGENT_KEYS.includes(actor) && actor !== "twin" && kind === "styled") return add(styledCard(d, actor));
   if (actor === "system") return add(sysBubble(d.text));
 }
 
@@ -226,45 +254,52 @@ function routedBubble(fromKey, icon, fromName, toKey, tagline, text) {
   m.innerHTML = `<div class="who"><span class="ava ${fromKey}">${icon}</span>${esc(fromName)} ${ARROW} ${atTag(toKey)}${tagline ? ` · ${esc(tagline)}` : ""}</div><div class="body">${esc(text)}</div>`;
   return m;
 }
-function reportCard(d) {
-  const m = el("div", "msg data report");
+function reportCard(d, actor = "data") {
+  const meta = AGENT_META[actor] || { name: actor, icon: "■" };
+  const m = el("div", `msg ${actor} report`);
   const fs = (d.findings || []).map((f) => `<li>${esc(f)}</li>`).join("");
-  m.innerHTML = `<div class="who"><span class="ava data">📊</span>数据分析 Agent ${ARROW} ${atTag("twin")} · ${d.final ? "最终报告" : "阶段报告"}</div><div class="body"><b>${esc(d.summary || d.text)}</b>${fs ? `<ul>${fs}</ul>` : ""}</div>`;
+  m.innerHTML = `<div class="who"><span class="ava ${actor}">${meta.icon}</span>${esc(meta.name)} ${ARROW} ${atTag("twin")} · ${d.final ? "最终报告" : "阶段报告"}</div><div class="body"><b>${esc(d.summary || d.text)}</b>${fs ? `<ul>${fs}</ul>` : ""}</div>`;
   return m;
 }
 // 记住样式优化 Agent 最近交回的排版稿，供交付卡片复用其高亮排版
 let lastStyled = null;
-function styledCard(d) {
+function styledCard(d, actor = "style") {
   lastStyled = { title: d.title || "", summary: d.summary || "", highlights: d.highlights || [], sections: d.sections || [] };
+  const meta = AGENT_META[actor] || { name: actor, icon: "■" };
   const c = el("div", "card styled");
   const hls = (d.highlights || []).map((h) => `<span class="hl">${esc(h)}</span>`).join("");
   const secs = (d.sections || []).map((s) => `<div class="styled-sec"><h5>${esc(s.heading || "")}</h5><ul>${(s.bullets || []).map((b) => `<li>${esc(b)}</li>`).join("")}</ul></div>`).join("");
-  c.innerHTML = `<div class="card-h">✨ 样式优化 Agent ${ARROW} ${atTag("twin")} · 排版稿</div><div class="card-b">
+  c.innerHTML = `<div class="card-h">${meta.icon} ${esc(meta.name)} ${ARROW} ${atTag("twin")} · 排版稿</div><div class="card-b">
     ${d.title ? `<div class="styled-title">${esc(d.title)}</div>` : ""}
     ${d.summary ? `<div class="styled-tldr">${esc(d.summary)}</div>` : ""}
     ${hls ? `<div class="styled-highlights">${hls}</div>` : ""}
     ${secs}</div>`;
   return c;
 }
-function confirmCard(d) {
+function confirmCard(d, actor = "data") {
+  const meta = AGENT_META[actor] || { name: actor, icon: "■" };
   const c = el("div", "card confirm");
   const qs = (d.questions || []).map((q) =>
     `<div class="q-item"><div class="qt">${esc(q.text)}<span class="risk ${q.risk === "high" ? "high" : "low"}">${q.risk === "high" ? "高风险" : "低风险"}</span></div>
      <div class="qo">选项：${esc((q.options || []).join(" / ") || "开放")}　推荐：${esc(q.recommendation ?? "-")}</div></div>`).join("");
-  c.innerHTML = `<div class="card-h">📊 数据分析 Agent ${ARROW} ${atTag("twin")} · 抛出确认项（等代答）</div><div class="card-b">${d.text ? `<div class="muted">${esc(d.text)}</div>` : ""}${qs}</div>`;
+  c.innerHTML = `<div class="card-h">${meta.icon} ${esc(meta.name)} ${ARROW} ${atTag("twin")} · 抛出确认项（等代答）</div><div class="card-b">${d.text ? `<div class="muted">${esc(d.text)}</div>` : ""}${qs}</div>`;
   return c;
 }
 function answerCard(d) {
+  // answer 事件里有 to（被代答的工具 Agent key），没有则回退 "data"
+  const to = d.to || "data";
   const c = el("div", "card answer");
   const items = (d.answers || []).map((a) => `<div class="ans-item"><span class="a">✓ ${esc(a.answer)}</span> <span class="r">— ${esc(a.reason || "")}</span></div>`).join("");
-  c.innerHTML = `<div class="card-h">◆ Twin ${ARROW} ${atTag("data")} · 代替你回答确认项（未打扰你）</div><div class="card-b">${d.text ? `<div class="muted">${esc(d.text)}</div>` : ""}${items}</div>`;
+  c.innerHTML = `<div class="card-h">◆ Twin ${ARROW} ${atTag(to)} · 代替你回答确认项（未打扰你）</div><div class="card-b">${d.text ? `<div class="muted">${esc(d.text)}</div>` : ""}${items}</div>`;
   return c;
 }
-function toolCard(d) {
+function toolCard(d, actor = "data") {
+  const meta = AGENT_META[actor] || { name: actor, icon: "■" };
   const c = el("div", "card tool"); c.dataset.name = d.name || "";
-  c.innerHTML = `<div class="card-h">🔧 数据 Agent 真实查询 · ${esc(d.name || "")}</div>
+  const actionLabel = d.lang === "python" || d.code ? "代码执行" : "真实查询";
+  c.innerHTML = `<div class="card-h">🔧 ${esc(meta.name)} ${actionLabel} · ${esc(d.name || "")}</div>
     <div class="card-b"><div class="purpose">${esc(d.text || "")}</div>
-    <div class="sqlmini">${esc(d.sql || "")}</div>
+    <div class="sqlmini">${esc(d.sql || d.code || "")}</div>
     <div class="rmeta">执行中…</div></div>`;
   return c;
 }

@@ -49,9 +49,8 @@
         <div class="new-task-foot">
           <div class="use-models">
             <span class="um-label">本次使用</span>
-            <span class="um-chip" id="um-twin">Twin …</span>
-            <span class="um-chip" id="um-data">数据 …</span>
-            <span class="um-chip" id="um-style">样式 …</span>
+            <!-- Agent 模型 chips 由 app.js:renderUseModelsChips() 从 roster 动态生成 -->
+            <span id="useModels" class="use-models-list"></span>
           </div>
           <button id="startBtn" class="primary">交给 Twin ▸</button>
         </div>
@@ -77,11 +76,8 @@
       </div>
       <div id="feed" class="feed"></div>
       <div id="composer" class="composer">
-        <select id="injectTarget" title="选择插话对象">
-          <option value="twin">@ Twin</option>
-          <option value="data">@ 数据 Agent</option>
-          <option value="style">@ 样式 Agent</option>
-        </select>
+        <!-- @ 提及下拉由 app.js:renderInjectTarget() 从 roster 动态生成 -->
+        <select id="injectTarget" title="选择插话对象"></select>
         <input id="injectInput" placeholder="随时插话：@ 某个 Agent 补充要求、纠偏或回复升级问题…" />
         <button id="injectSend" class="primary">发送</button>
       </div>

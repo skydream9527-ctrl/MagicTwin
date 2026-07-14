@@ -19,8 +19,15 @@ import { runQuery } from "../integrations/data-query.js";
 import { CONFIG } from "../config.js";
 import { appendEvent, appendDecision, appendThinking, updateMeta, writeState, getMeta, readDecisions, readEvents, saveSql, saveData } from "../domain/store.js";
 import { buildTwinSystem } from "../prompts/twin.js";
-import { buildDataAgentSystem } from "../prompts/data-agent.js";
-import { buildStyleAgentSystem } from "../prompts/style-agent.js";
+import { buildToolSystem } from "../prompts/generic.js";
+import { ROSTER, getRosterEntry } from "../domain/roster.js";
+
+// 工具 Agent 的 roster 派生信息（运行时只读，避免重复查找）
+const TOOL_AGENTS = ROSTER.filter((a) => a.kind === "tool");
+const TOOL_KEYS = TOOL_AGENTS.map((a) => a.key);
+const TOOL_NAME = Object.fromEntries(ROSTER.map((a) => [a.key, a.name]));
+const TOOL_CAPS = Object.fromEntries(ROSTER.map((a) => [a.key, a.capabilities || []]));
+const ALL_KEYS = ROSTER.map((a) => a.key); // twin + tools，用于插话路由校验
 
 // —— 容错 JSON 解析 ——
 function parseAgentJson(text) {
@@ -85,7 +92,8 @@ async function callAgent(model, messages, tag = "") {
 }
 
 // —— Agent 之间“看到”的消息格式化 ——
-function twinToDataText(a) {
+function twinToToolText(a, key) {
+  const name = TOOL_NAME[key] || key;
   if (a.type === "assign") return `【Twin 派发任务】\n${a.message || ""}`;
   if (a.type === "answer") {
     const lines = (a.answers || []).map((x) => `- [${x.id}] ${x.answer}${x.reason ? `（理由：${x.reason}）` : ""}`);
@@ -100,13 +108,15 @@ function twinToStyleText(a, goal, lastReport) {
     : "";
   return `【Twin 请你美化排版】\n用户目标：${goal}${rep}\nTwin 说明：${a.message || ""}\n请把它整理成结构清晰、可直接交付给用户的报告，只输出规定的 JSON。`;
 }
-function dataAskText(a) {
+function toolAskText(a, key) {
+  const name = TOOL_NAME[key] || key;
   const qs = (a.questions || []).map((q) => `- [${q.id}] ${q.text}｜选项:${(q.options || []).join("/")}｜推荐:${q.recommendation ?? "-"}｜风险:${q.risk || "low"}`);
-  return `【数据 Agent 的确认项】${a.message || ""}\n${qs.join("\n")}`;
+  return `【${name} 的确认项】${a.message || ""}\n${qs.join("\n")}`;
 }
-function dataReportText(a) {
+function toolReportText(a, key) {
+  const name = TOOL_NAME[key] || key;
   const fs = (a.findings || []).map((f) => `- ${f}`).join("\n");
-  return `【数据 Agent ${a.final ? "最终" : ""}报告】${a.message || ""}\n结论：${a.summary || ""}\n发现：\n${fs}\n\n请你以用户视角验收：有硬伤就打回（target=data）；通过就交给样式优化 Agent 排版（target=style, type=beautify）。`;
+  return `【${name} ${a.final ? "最终" : ""}报告】${a.message || ""}\n结论：${a.summary || ""}\n发现：\n${fs}\n\n请你以用户视角验收：有硬伤就打回（target=${key}, type=rework）；通过就交给样式优化 Agent 排版（target=style, type=beautify）或直接交付（target=user, type=deliver）。`;
 }
 function styledReportText(a) {
   const secs = (a.sections || []).map((s) => `【${s.heading || ""}】\n${(s.bullets || []).map((b) => `- ${b}`).join("\n")}`).join("\n");
@@ -126,15 +136,14 @@ function toolResultText(name, res) {
  * @param {object} p
  * @param {string} p.tid
  * @param {string} p.goal
- * @param {{twin:string,data:string,style:string}} [p.models]  本任务使用的模型（缺省用 CONFIG）
+ * @param {Record<string,string>} [p.models]  本任务使用的模型，键为 agent key（twin/data/style/...）
  * @param {(event:object)=>object} p.ssePush
  * @param {()=>Array<{kind:string,to:string,text:string}>} p.takeInjections  取出并清空用户插话队列
  * @param {()=>Promise<void>} p.waitForInjection  空闲时挂起，直到有新的用户插话/回复
  */
 export async function runOrchestration({ tid, goal, models, resumeEvents, ssePush, takeInjections, waitForInjection }) {
-  const twinModel = models?.twin || CONFIG.twinModel;
-  const dataModel = models?.data || CONFIG.dataModel;
-  const styleModel = models?.style || CONFIG.styleModel;
+  // 模型解析：传入的 models（按 key）→ CONFIG.models 兜底
+  const modelOf = (key) => (models && models[key]) || CONFIG.models[key] || "gpt-4o";
 
   const emit = (event) => {
     if (event.transient) { ssePush({ seq: -1, ts: new Date().toISOString(), ...event }); return event; }
@@ -144,16 +153,22 @@ export async function runOrchestration({ tid, goal, models, resumeEvents, ssePus
     appendThinking(tid, { actor, model, reasoning: r.reasoning || "", raw: r.raw || "", attempts: r.attempts, ms: r.ms, usage: r.usage || {} });
   };
 
+  // —— 消息数组：Twin 始终存在；工具 Agent 懒加载（首次被派活时才建）——
   const twinMessages = [{ role: "system", content: buildTwinSystem() }];
-  const dataMessages = [{ role: "system", content: buildDataAgentSystem() }];
-  const styleMessages = [{ role: "system", content: buildStyleAgentSystem() }];
+  const toolMessages = new Map(); // key → messages[]
+  const getToolMessages = (key) => {
+    if (!toolMessages.has(key)) {
+      toolMessages.set(key, [{ role: "system", content: buildToolSystem(key) }]);
+    }
+    return toolMessages.get(key);
+  };
 
   let turn = "twin";
   let steps = 0;
-  let lastReport = null;
+  let lastReport = null; // 任意工具 Agent 的最近一次 report，供 Twin 验收 / style 排版参考
 
   if (Array.isArray(resumeEvents) && resumeEvents.length) {
-    // —— 断点续跑：从已持久化事件重建上下文，从当前进度继续（服务重启/刷新后重连触发）——
+    // —— 断点续跑：从已持久化事件重建上下文 ——
     const main = resumeEvents.filter((e) => e.channel !== "side");
     const sqlByName = {};
     main.forEach((e) => { if (e.kind === "tool_call") sqlByName[e.name] = e.text || ""; });
@@ -163,7 +178,7 @@ export async function runOrchestration({ tid, goal, models, resumeEvents, ssePus
     const reportEvt = [...main].reverse().find((e) => e.kind === "report");
     if (reportEvt) lastReport = { summary: reportEvt.summary || "", findings: reportEvt.findings || [] };
     const historyBrief = main.map((e) => {
-      const who = { user: "用户", twin: "Twin", data: "数据Agent", style: "样式Agent", system: "系统" }[e.actor] || e.actor;
+      const who = { user: "用户", twin: "Twin", system: "系统" }[e.actor] || TOOL_NAME[e.actor] || e.actor;
       const t = e.text || e.summary || (e.name ? `查询 ${e.name}` : "");
       return `· ${who}/${e.kind}: ${String(t).slice(0, 80)}`;
     }).join("\n");
@@ -172,12 +187,26 @@ export async function runOrchestration({ tid, goal, models, resumeEvents, ssePus
 已发生的协作（旧→新）：
 ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n${doneQueries}` : ""}`;
     twinMessages.push({ role: "user", content: `${resumeNote}\n\n你是 Twin，请按职责继续（验收 / 派活 / 代答 / 交付 其一）。` });
-    dataMessages.push({ role: "user", content: `${resumeNote}\n\n你是数据分析 Agent，请基于以上已查结果继续分析与归因，按协议输出下一步（query / ask / report）。` });
-    styleMessages.push({ role: "user", content: `${resumeNote}\n\n你是样式优化 Agent，收到排版任务再开始。` });
+    // 给所有已知介入过的工具 Agent 都塞一条恢复提示；它们首次被 getToolMessages 时已建好 system prompt
+    const involvedTools = new Set(main.map((e) => e.actor).filter((a) => TOOL_KEYS.includes(a)));
+    for (const key of involvedTools) {
+      getToolMessages(key).push({ role: "user", content: `${resumeNote}\n\n你是 ${TOOL_NAME[key]}，请基于以上历史继续，按协议输出下一步。` });
+    }
     const last = main[main.length - 1] || {};
-    const turnByKind = { deliver: null, escalate: null, tool_result: "data", tool_call: "data", ask: "twin", report: "twin", assign: "data", answer: "data", rework: "data", beautify: "style", styled: "twin" };
-    turn = (last.actor === "user" && last.kind === "inject") ? (["twin", "data", "style"].includes(last.to) ? last.to : "twin")
-      : (last.kind in turnByKind ? turnByKind[last.kind] : "twin");
+    // 路由表：根据上一条事件种类决定下一个发言者
+    const turnByKind = { deliver: null, escalate: null, tool_result: null, tool_call: null, ask: "twin", report: "twin", assign: null, answer: null, rework: null, beautify: "style", styled: "twin" };
+    // tool_call/tool_result 之后的发言者：找最近的 tool_call 事件，取其 actor
+    if (last.kind === "tool_result" || last.kind === "tool_call") {
+      const lastCall = [...main].reverse().find((e) => e.kind === "tool_call");
+      turn = lastCall && TOOL_KEYS.includes(lastCall.actor) ? lastCall.actor : "twin";
+    } else if (last.actor === "user" && last.kind === "inject") {
+      turn = ALL_KEYS.includes(last.to) ? last.to : "twin";
+    } else if (last.kind === "assign" || last.kind === "answer" || last.kind === "rework") {
+      // Twin → tool 的派活/回复/打回：下一个发言者是 target
+      turn = TOOL_KEYS.includes(last.to) ? last.to : "twin";
+    } else {
+      turn = last.kind in turnByKind ? turnByKind[last.kind] : "twin";
+    }
     updateMeta(tid, { status: "执行中" });
     emit({ actor: "system", kind: "notice", text: "检测到该任务此前被中断，正在从当前进度自动续跑…" });
   } else {
@@ -187,15 +216,15 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
 
   // 把一条用户插话路由到目标 Agent（并在主对话区显示为一条 @ 消息）
   const routeInjection = (inj) => {
-    const to = ["twin", "data", "style"].includes(inj.to) ? inj.to : "twin";
+    const to = ALL_KEYS.includes(inj.to) ? inj.to : "twin";
     emit({ actor: "user", kind: "inject", channel: "main", to, text: inj.text });
     if (to === "twin") {
       const framing = inj.kind === "reply" ? "【用户回复】" : "【用户 @你 说】";
       twinMessages.push({ role: "user", content: `${framing}${inj.text}` });
-    } else if (to === "data") {
-      dataMessages.push({ role: "user", content: `【用户 @你（数据 Agent）说】${inj.text}\n（回应后仍把结果交回 Twin）` });
-    } else if (to === "style") {
-      styleMessages.push({ role: "user", content: `【用户 @你（样式优化 Agent）说】${inj.text}\n（回应后仍把结果交回 Twin）` });
+    } else {
+      // 工具 Agent：注入到其消息流
+      const name = TOOL_NAME[to] || to;
+      getToolMessages(to).push({ role: "user", content: `【用户 @你（${name}）说】${inj.text}\n（回应后仍把结果交回 Twin）` });
     }
     turn = to;
   };
@@ -221,24 +250,35 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
 
       if (turn === "twin") {
         emit({ actor: "twin", kind: "status", text: "Twin 正在思考…", transient: true });
-        const r = await callAgent(twinModel, twinMessages, "twin");
-        logThinking("twin", twinModel, r);
+        const m = modelOf("twin");
+        const r = await callAgent(m, twinMessages, "twin");
+        logThinking("twin", m, r);
         const a = r.json;
         twinMessages.push({ role: "assistant", content: r.raw });
         if (!a) { emit({ actor: "system", kind: "error", text: "Twin 输出无法解析，已停止。" }); updateMeta(tid, { status: "报错" }); turn = null; continue; }
 
-        if (a.target === "data" && ["assign", "answer", "rework"].includes(a.type)) {
-          emit({ actor: "twin", kind: a.type, channel: "main", to: "data", text: a.message || "", answers: a.answers || undefined });
+        // Twin 派活/回复/打回到任一工具 Agent（target 为该 Agent 的 key）
+        if (TOOL_KEYS.includes(a.target) && ["assign", "answer", "rework"].includes(a.type)) {
+          emit({ actor: "twin", kind: a.type, channel: "main", to: a.target, text: a.message || "", answers: a.answers || undefined });
           if (a.type === "answer" && Array.isArray(a.answers)) {
             for (const ans of a.answers) appendDecision(tid, { question: ans.id, answer: ans.answer, reason: ans.reason });
             writeState(tid, getMeta(tid), readDecisions(tid));
           }
-          dataMessages.push({ role: "user", content: twinToDataText(a) });
-          turn = "data";
-        } else if (a.type === "beautify" || (a.target === "style")) {
-          emit({ actor: "twin", kind: "beautify", channel: "main", to: "style", text: a.message || "把这份结论整理成可交付用户的报告" });
-          styleMessages.push({ role: "user", content: twinToStyleText(a, goal, lastReport) });
-          turn = "style";
+          getToolMessages(a.target).push({ role: "user", content: twinToToolText(a, a.target) });
+          turn = a.target;
+        } else if (a.type === "beautify" || a.target === "style") {
+          // 专用：交给样式优化 Agent 排版
+          if (!TOOL_KEYS.includes("style")) {
+            // style 未在 roster 中登记时退化为 deliver
+            emit({ actor: "twin", kind: "deliver", channel: "main", to: "user", text: a.message || "（样式优化 Agent 未启用，直接交付）" });
+            updateMeta(tid, { status: "已交付" });
+            writeState(tid, getMeta(tid), readDecisions(tid));
+            turn = null;
+          } else {
+            emit({ actor: "twin", kind: "beautify", channel: "main", to: "style", text: a.message || "把这份结论整理成可交付用户的报告" });
+            getToolMessages("style").push({ role: "user", content: twinToStyleText(a, goal, lastReport) });
+            turn = "style";
+          }
         } else if (a.type === "deliver") {
           emit({ actor: "twin", kind: "deliver", channel: "main", to: "user", text: a.message || "", decisions: a.decisions || [], next_steps: a.next_steps || [] });
           if (Array.isArray(a.decisions)) for (const d of a.decisions) appendDecision(tid, d);
@@ -250,53 +290,66 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
           updateMeta(tid, { status: "待确认" });
           turn = null; // 等用户回复（通过 /reply → 插话到 twin）后恢复
         } else {
-          twinMessages.push({ role: "user", content: "请从 assign/answer/rework/beautify/deliver/escalate 中选择一个合法 type、并给出正确 target 再输出。" });
+          twinMessages.push({ role: "user", content: `请从 assign/answer/rework/beautify/deliver/escalate 中选择一个合法 type、并给出正确 target（可选工具 Agent：${TOOL_KEYS.join("/")}）再输出。` });
         }
-      } else if (turn === "data") {
-        emit({ actor: "data", kind: "status", text: "数据 Agent 正在工作…", transient: true });
-        const r = await callAgent(dataModel, dataMessages, "data");
-        logThinking("data", dataModel, r);
+      } else if (TOOL_KEYS.includes(turn)) {
+        // —— 通用工具 Agent 分支：取代原 data/style 硬编码分支 ——
+        const key = turn;
+        const name = TOOL_NAME[key] || key;
+        const caps = TOOL_CAPS[key] || [];
+        const msgs = getToolMessages(key);
+        emit({ actor: key, kind: "status", text: `${name} 正在工作…`, transient: true });
+        const m = modelOf(key);
+        const r = await callAgent(m, msgs, key);
+        logThinking(key, m, r);
         const a = r.json;
-        dataMessages.push({ role: "assistant", content: r.raw });
-        if (!a) { emit({ actor: "system", kind: "error", text: "数据 Agent 输出无法解析，已停止。" }); updateMeta(tid, { status: "报错" }); turn = null; continue; }
+        msgs.push({ role: "assistant", content: r.raw });
+        if (!a) { emit({ actor: "system", kind: "error", text: `${name} 输出无法解析，已停止。` }); updateMeta(tid, { status: "报错" }); turn = null; continue; }
 
-        if (a.type === "query") {
-          const name = (a.name || `T${steps}`).replace(/[^\w.\-]/g, "_");
-          emit({ actor: "data", kind: "tool_call", channel: "main", text: a.purpose || "执行查询", sql: a.sql, name });
+        if (a.type === "query" && caps.includes("query")) {
+          const qn = (a.name || `T${steps}`).replace(/[^\w.\-]/g, "_");
+          emit({ actor: key, kind: "tool_call", channel: "main", text: a.purpose || "执行查询", sql: a.sql, name: qn });
           const res = await runQuery(a.sql || "");
-          saveSql(tid, name, a.sql || "");
-          if (res.ok) saveData(tid, name, { sql: a.sql, columns: res.columns, records: res.records });
+          saveSql(tid, qn, a.sql || "");
+          if (res.ok) saveData(tid, qn, { sql: a.sql, columns: res.columns, records: res.records });
           emit({
-            actor: "system", kind: "tool_result", channel: "main", name, ok: res.ok, ms: res.ms,
+            actor: "system", kind: "tool_result", channel: "main", name: qn, ok: res.ok, ms: res.ms,
             rowCount: res.rowCount, columns: res.columns, colTypes: res.colTypes,
             records: res.ok ? res.records.slice(0, 200) : undefined,
             error: res.error, code: res.code,
           });
-          dataMessages.push({ role: "user", content: toolResultText(name, res) });
-          turn = "data";
+          msgs.push({ role: "user", content: toolResultText(qn, res) });
+          turn = key; // 继续自己跑
+        } else if (a.type === "execute" && caps.includes("execute")) {
+          // 代码沙箱：P1 待实现，这里给一个明确的错误回喂，避免死循环
+          // TODO: 接入 server/integrations/sandbox.js（runPython(code)）后替换这段
+          const en = (a.name || `E${steps}`).replace(/[^\w.\-]/g, "_");
+          emit({ actor: key, kind: "tool_call", channel: "main", text: a.purpose || "执行代码", code: a.code, name: en, lang: "python" });
+          const fake = { ok: false, error: "代码沙箱尚未配置（SANDBOX_NOT_IMPLEMENTED）。请在 server/integrations/sandbox.js 接入后启用 execute 能力。", code: "SANDBOX_NOT_IMPLEMENTED", ms: 0 };
+          emit({ actor: "system", kind: "tool_result", channel: "main", name: en, ok: false, error: fake.error, code: fake.code, ms: 0 });
+          msgs.push({ role: "user", content: `【代码执行失败 ${en}】${fake.error}（code=${fake.code}）。请改用 query 或直接 report 当前结论。` });
+          turn = key;
         } else if (a.type === "ask") {
-          emit({ actor: "data", kind: "ask", channel: "main", to: "twin", text: a.message || "", questions: a.questions || [] });
-          twinMessages.push({ role: "user", content: dataAskText(a) });
+          emit({ actor: key, kind: "ask", channel: "main", to: "twin", text: a.message || "", questions: a.questions || [] });
+          twinMessages.push({ role: "user", content: toolAskText(a, key) });
           turn = "twin";
         } else if (a.type === "report") {
           lastReport = { summary: a.summary || "", findings: a.findings || [] };
-          emit({ actor: "data", kind: "report", channel: "main", to: "twin", text: a.message || "", summary: a.summary || "", findings: a.findings || [], final: !!a.final, artifacts: a.artifacts || [] });
-          twinMessages.push({ role: "user", content: dataReportText(a) });
+          emit({ actor: key, kind: "report", channel: "main", to: "twin", text: a.message || "", summary: a.summary || "", findings: a.findings || [], final: !!a.final, artifacts: a.artifacts || [] });
+          twinMessages.push({ role: "user", content: toolReportText(a, key) });
+          turn = "twin";
+        } else if (a.type === "styled") {
+          // 样式优化 Agent 的专用交回动作（与 report 类似但带排版稿字段）
+          emit({ actor: key, kind: "styled", channel: "main", to: "twin", title: a.title || "", summary: a.summary || "", highlights: a.highlights || [], sections: a.sections || [], text: a.message || "" });
+          twinMessages.push({ role: "user", content: styledReportText(a) });
           turn = "twin";
         } else {
-          dataMessages.push({ role: "user", content: "请从 ask/query/report 中选择一个合法 type 再输出。" });
+          const legal = ["ask", "report", ...caps];
+          msgs.push({ role: "user", content: `请从 ${legal.join("/")} 中选择一个合法 type 再输出。` });
         }
-      } else if (turn === "style") {
-        emit({ actor: "style", kind: "status", text: "样式优化 Agent 正在排版…", transient: true });
-        const r = await callAgent(styleModel, styleMessages, "style");
-        logThinking("style", styleModel, r);
-        const a = r.json;
-        styleMessages.push({ role: "assistant", content: r.raw });
-        if (!a) { emit({ actor: "system", kind: "error", text: "样式优化 Agent 输出无法解析，已停止。" }); updateMeta(tid, { status: "报错" }); turn = null; continue; }
-
-        // 样式 Agent 只交回 Twin
-        emit({ actor: "style", kind: "styled", channel: "main", to: "twin", title: a.title || "", summary: a.summary || "", highlights: a.highlights || [], sections: a.sections || [], text: a.message || "" });
-        twinMessages.push({ role: "user", content: styledReportText(a) });
+      } else {
+        // 未识别的 turn（理论上不应发生）：回到 twin 兜底
+        emit({ actor: "system", kind: "notice", text: `未识别的发言者 ${turn}，回到 Twin。`, transient: true });
         turn = "twin";
       }
     }
@@ -318,7 +371,7 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
  * @returns {Promise<string>} Twin 的回答
  */
 export async function runTwinInquiry({ tid, models, question, ssePush }) {
-  const twinModel = models?.twin || CONFIG.twinModel;
+  const twinModel = (models && models.twin) || CONFIG.models.twin || "gpt-4o";
   const meta = getMeta(tid);
   const decisions = readDecisions(tid);
   const events = readEvents(tid).filter((e) => e.channel !== "side");
@@ -328,10 +381,13 @@ export async function runTwinInquiry({ tid, models, question, ssePush }) {
   }).join("\n");
   const decLines = decisions.length ? decisions.map((d) => `- ${d.question || d.summary || ""} → ${d.answer || ""}`).join("\n") : "（暂无）";
 
+  // 模型概览：从 models 全量打印，方便用户在私聊里看到所有 Agent 的模型
+  const modelLines = ROSTER.map((a) => `${a.name}=${(models && models[a.key]) || CONFIG.models[a.key] || "-"}`).join(" / ");
+
   const sys = `你是用户的数字分身「Twin」。用户在工作区的"与 Twin 私聊"侧边栏里，随时问你关于当前这个数据分析任务的**进度 / 过程 / 你替他做了什么决定**之类的问题。请以简洁、亲切、结论优先的中文口语回答，像分身向本人快速汇报。不要输出 JSON，不要 markdown 代码块，控制在 2~5 句话。`;
   const ctx = `【任务目标】${meta?.goal || ""}
 【当前状态】${meta?.status || ""}
-【使用模型】Twin=${models?.twin || twinModel} / 数据Agent=${models?.data || "-"} / 样式Agent=${models?.style || "-"}
+【使用模型】${modelLines}
 【我替用户做的决定】
 ${decLines}
 【最近动态（旧→新）】

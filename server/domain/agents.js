@@ -17,13 +17,14 @@ const ROOT = join(HERE, "..", ".."); // domain -> server -> 项目根
 const TEXT_EXT = new Set([".md", ".js", ".mjs", ".cjs", ".txt", ".json", ".sql", ".css", ".html", ".yml", ".yaml"]);
 const MAX_FILE = 500 * 1024; // 单文件预览上限，超出截断
 
-const DEFAULT_MODELS = { twin: CONFIG.twinModel, data: CONFIG.dataModel, style: CONFIG.styleModel };
-
+// modelOf：从 agent-config.json 读用户保存的模型，回退到 CONFIG.models.<key>
+// 支持任意 roster 中登记的 Agent，新增 Agent 自动可用。
 function modelOf(key) {
   try {
     const saved = JSON.parse(readFileSync(join(ROOT, "workspace", "agent-config.json"), "utf8"));
-    return saved[key] || DEFAULT_MODELS[key] || "";
-  } catch { return DEFAULT_MODELS[key] || ""; }
+    if (saved[key]) return saved[key];
+  } catch {}
+  return CONFIG.models[key] || "";
 }
 
 // 读取单个关联文件的元信息（可读文本还会带 content）
@@ -49,11 +50,13 @@ function loadFile(f) {
   return info;
 }
 
-// 供 /api/agents：三个 Agent 的概要（不含文件内容）
+// 供 /api/agents：所有 Agent 的概要（不含文件内容）
 export function getAgentList() {
   return ROSTER.map((a) => ({
-    key: a.key, name: a.name, icon: a.icon, color: a.color,
-    tagline: a.tagline, model: modelOf(a.key), fileCount: a.files.length,
+    key: a.key, kind: a.kind, name: a.name, icon: a.icon, color: a.color,
+    tagline: a.tagline, model: modelOf(a.key),
+    capabilities: a.capabilities || [],
+    fileCount: (a.files || []).length,
   }));
 }
 
@@ -62,9 +65,10 @@ export function getAgentDetail(key) {
   const a = getRosterEntry(key);
   if (!a) return null;
   return {
-    key: a.key, name: a.name, icon: a.icon, color: a.color, tagline: a.tagline,
+    key: a.key, kind: a.kind, name: a.name, icon: a.icon, color: a.color, tagline: a.tagline,
     role: a.role, responsibilities: a.responsibilities, boundary: a.boundary,
+    capabilities: a.capabilities || [],
     model: modelOf(a.key),
-    files: a.files.map(loadFile),
+    files: (a.files || []).map(loadFile),
   };
 }

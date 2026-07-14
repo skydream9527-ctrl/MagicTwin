@@ -37,6 +37,7 @@ export const ROSTER = [
   {
     key: "data",
     kind: "tool",
+    capabilities: ["query"],
     name: "数据分析 Agent",
     icon: "📊",
     color: "data",
@@ -65,6 +66,7 @@ export const ROSTER = [
   {
     key: "style",
     kind: "tool",
+    capabilities: [],
     name: "样式优化 Agent",
     icon: "✨",
     color: "style",
@@ -89,6 +91,7 @@ export const ROSTER = [
   {
     key: "general",
     kind: "tool",
+    capabilities: [],
     name: "通用 Agent",
     icon: "🤖",
     color: "general",
@@ -110,6 +113,7 @@ export const ROSTER = [
   {
     key: "code-runner",
     kind: "tool",
+    capabilities: ["execute"],
     name: "代码执行 Agent",
     icon: "🐍",
     color: "code",
@@ -131,6 +135,7 @@ export const ROSTER = [
   {
     key: "report-writer",
     kind: "tool",
+    capabilities: [],
     name: "报告撰写 Agent",
     icon: "📝",
     color: "report",
@@ -152,6 +157,7 @@ export const ROSTER = [
   {
     key: "data-monitor",
     kind: "tool",
+    capabilities: ["query"],
     name: "数据监控 Agent",
     icon: "🔔",
     color: "monitor",

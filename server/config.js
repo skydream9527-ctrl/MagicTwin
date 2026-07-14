@@ -1,12 +1,32 @@
 // 集中配置。所有参数均可用环境变量覆盖（见 .env.example）。
 // 模型名格式取决于你的 LLM 网关：OpenAI 原生用 "gpt-4o"，支持 {owner}/{id} 的网关用 "openai/gpt-4o"。
+import { ROSTER } from "./domain/roster.js";
+
+// 从 roster 派生「每个 Agent 的默认模型」：
+//   - 优先读环境变量 <KEY_UPPER>_MODEL（如 TWIN_MODEL / DATA_MODEL / CODE_RUNNER_MODEL）
+//   - 否则用 roster.entry.defaultModel（若声明）
+//   - 否则回退 gpt-4o
+// 新增 Agent 无需改本文件，加 env 变量或 roster.defaultModel 即可。
+function buildDefaultModels() {
+  const out = {};
+  for (const a of ROSTER) {
+    const envKey = `${a.key.toUpperCase().replace(/-/g, "_")}_MODEL`;
+    out[a.key] = process.env[envKey] || a.defaultModel || "gpt-4o";
+  }
+  return out;
+}
+
+const DEFAULT_MODELS = buildDefaultModels();
+
 export const CONFIG = {
   port: Number(process.env.PORT || 8787),
 
-  // 三个角色的默认模型。换成你自己的 OpenAI 兼容端点支持的模型即可。
-  twinModel: process.env.TWIN_MODEL || "gpt-4o",
-  dataModel: process.env.DATA_MODEL || "gpt-4o",
-  styleModel: process.env.STYLE_MODEL || "gpt-4o",
+  // 每个 Agent 的默认模型（从 roster 派生 + env 覆盖）。
+  // 兼容旧字段名 twinModel / dataModel / styleModel。
+  models: DEFAULT_MODELS,
+  get twinModel() { return DEFAULT_MODELS.twin; },
+  get dataModel() { return DEFAULT_MODELS.data; },
+  get styleModel() { return DEFAULT_MODELS.style; },
 
   // reasoning 模型先产 reasoning_content（计入 max_tokens），需给足 token 以免正式回复被截断
   maxTokens: Number(process.env.MAX_TOKENS || 4000),
