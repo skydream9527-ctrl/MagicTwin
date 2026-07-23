@@ -1,16 +1,20 @@
-// 三个 Agent 的单一真相源：结构化注册表。
+// 花名册（ROSTER）是所有 Agent 的单一真相源：结构化注册表。
 // 对齐「统一 Agent」抽象：Twin 是用户私有的特权 Agent（kind=twin，落在用户空间），
-// 数据 / 样式是团队共享的工具 Agent（kind=tool，落在 Agent 空间）。
-// 各 Agent 的操作手册（agent.md）、取数知识、用户画像、进化记忆（memory/）另以文件为真相源存于其 space 目录。
+// 工具 Agent 是团队共享的（kind=tool，落在 Agent 空间）。
+// 各 Agent 的操作手册（agent.md）、领域知识、用户画像、进化记忆（memory/）另以文件为真相源存于其 space 目录。
+// 支持动态自定义 Agent：运行时自动合并 workspace/agents/custom-agents.json 中注册的自定义 Agent。
 //
 // 后端（domain/agents.js 组装详情、config 默认模型键、store 镜像历史、evolve 每日进化）与前端
-//（/api/agents 派生首页/配置卡片）都从这里派生，避免「三个 Agent」在多处硬编码。
-// 新增 Agent 只需在此登记 + 建其 space 目录。
+//（/api/agents 派生首页/配置卡片）都从这里派生，不在别处硬编码某几个 Agent。
+// 新增 Agent 只需在此登记 + 建其 space 目录（放 agent.md），或通过 API 动态创建自定义 Agent。
 //
-// key 为对外稳定标识（twin/data/style），与 agent-config.json、/api/agent/:key、前端一致；
-// space 为该 Agent 在 workspace 下的目录（可与 key 不同名）。
+// key 为对外稳定标识，与 agent-config.json、/api/agent/:key、前端一致；
+// space 为该 Agent 在 workspace 下的目录（可与 key 不同名）；
+// capabilities 声明可执行的动作："query" = 只读 SQL 查询，"execute" = Python 沙箱代码执行。
 
-export const ROSTER = [
+import { getCustomAgentSpecs } from "./custom-agents.js";
+
+const BASE_ROSTER = [
   {
     key: "twin",
     kind: "twin",
@@ -19,12 +23,12 @@ export const ROSTER = [
     color: "twin",
     tagline: "用户的代理人 / 唯一编排者",
     space: "workspace/users/u_local/twin",
-    role: "你的数字分身：理解你的意图，替你把活派给数据分析 Agent 与样式优化 Agent，替你回答确认项、验收产出、必要时打回，最后把结论交付给你。",
+    role: "你的数字分身：理解你的意图，替你把活派给合适的工具 Agent（数据分析 / 代码执行 / 报告撰写 / 数据监控等），替你回答确认项、验收产出、必要时打回，最后把结论交付给你。",
     responsibilities: [
-      "把（可能模糊的）目标翻译成清晰的分析任务，派给数据分析 Agent",
-      "代表用户回答数据 Agent 抛出的确认项（口径 / 时间窗 / 是否下钻）",
-      "站在用户视角挑剔地验收报告，有硬伤就打回重做",
-      "把通过验收的结论转交样式 Agent 排版，再交付给用户",
+      "把（可能模糊的）目标翻译成清晰的任务，派给合适的工具 Agent",
+      "代表用户回答工具 Agent 抛出的确认项（口径 / 时间窗 / 是否下钻）",
+      "站在用户视角挑剔地验收产出，有硬伤就打回重做",
+      "按需编排多 Agent 协作（如先取数 → 再跑 Python 分析 → 最后排版）",
       "沉淀「我替你做的决定」清单，只有真正高风险才升级问用户",
     ],
     boundary: "只提议不越权；不写 SQL、不查数、不亲自排版；高风险决策回来问用户。",
@@ -177,8 +181,28 @@ export const ROSTER = [
   },
 ];
 
+export const ROSTER = [...BASE_ROSTER, ...getCustomAgentSpecs()];
+
 export const AGENT_KEYS = ROSTER.map((a) => a.key);
 
 export function getRosterEntry(key) {
   return ROSTER.find((a) => a.key === key) || null;
+}
+
+export function isToolAgentKey(key) {
+  const e = getRosterEntry(key);
+  return !!e && e.kind === "tool";
+}
+
+export function defaultModelFor(key) {
+  const e = getRosterEntry(key);
+  if (!e) return "doubao-seed-2-1-pro";
+  if (key === "twin") return "doubao-seed-2-1-pro";
+  if (e.capabilities && e.capabilities.includes("query")) return "doubao-seed-2-1-pro";
+  if (e.capabilities && e.capabilities.includes("execute")) return "doubao-seed-2-1-pro";
+  return "doubao-seed-2-1-lite";
+}
+
+export function getDispatchableAgents() {
+  return ROSTER.filter(a => a.kind === "tool" && (!a.status || a.status === "published"));
 }

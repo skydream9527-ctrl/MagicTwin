@@ -181,7 +181,14 @@ function connect(tid) {
     }
   };
 }
-function setStatus(s) { const b = $("#taskStatus"); if (!s) { b.classList.add("hidden"); return; } b.className = "badge " + s; b.textContent = s; b.classList.remove("hidden"); }
+function setStatus(s) {
+  const b = $("#taskStatus");
+  if (!s) { b.classList.add("hidden"); updateControlButtons(null); return; }
+  b.className = "badge " + s;
+  b.textContent = s;
+  b.classList.remove("hidden");
+  updateControlButtons(s);
+}
 
 // ---------- 事件处理（主对话区进 feed，side 频道进侧栏）----------
 function add(node) {
@@ -422,11 +429,95 @@ async function doInquiry() {
   if (!question || !curTid) return;
   input.value = "";
   $("#sidePanel").classList.remove("hidden");
-  // 用户问题与 Twin 回答都由服务端 side 频道即时回推渲染，这里不本地回显以免重复
   try {
     const res = await fetch(`/api/task/${curTid}/inquiry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) });
     if (!res.ok) { const j = await res.json().catch(() => ({})); addSide("twin", `（未能送达：${esc(j.error || res.status)}）`); }
   } catch { addSide("twin", "（发送失败，网络错误）"); }
+}
+
+// ---------- 任务控制：暂停 / 恢复 / 终止 / 下载 ----------
+function updateControlButtons(status) {
+  const pauseBtn = $("#pauseBtn");
+  const resumeBtn = $("#resumeBtn");
+  const abortBtn = $("#abortBtn");
+  const downloadBtn = $("#downloadBtn");
+  [pauseBtn, resumeBtn, abortBtn, downloadBtn].forEach(b => b.classList.add("hidden"));
+  if (!curTid) return;
+  downloadBtn.classList.remove("hidden");
+  if (status === "执行中") {
+    pauseBtn.classList.remove("hidden");
+    abortBtn.classList.remove("hidden");
+  } else if (status === "已暂停") {
+    resumeBtn.classList.remove("hidden");
+    abortBtn.classList.remove("hidden");
+  }
+}
+async function pauseTask() {
+  if (!curTid) return;
+  try { await fetch(`/api/task/${curTid}/pause`, { method: "POST" }); } catch {}
+}
+async function resumeTask() {
+  if (!curTid) return;
+  try { await fetch(`/api/task/${curTid}/resume`, { method: "POST" }); } catch {}
+}
+async function abortTask() {
+  if (!curTid) return;
+  if (!confirm("确定终止当前任务吗？终止后无法恢复。")) return;
+  try { await fetch(`/api/task/${curTid}/abort`, { method: "POST" }); } catch {}
+}
+async function downloadBundle() {
+  if (!curTid) return;
+  window.open(`/api/task/${curTid}/download`, "_blank");
+}
+
+// ---------- 信任仪表盘 ----------
+async function showTrustDashboard() {
+  try {
+    const data = await (await fetch("/api/twin/trust")).json();
+    const nextReq = data.next_level ? Object.entries(data.next_level.requirements).map(([k, v]) => {
+      const name = { tasks: "完成任务", approval_rate: "认可率", experience_packs: "经验包数", consecutive_clean: "连续无纠错" }[k] || k;
+      const mark = v.met ? "✅" : "⬜";
+      const cur = k.includes("rate") ? Math.round(v.current * 100) + "%" : v.current;
+      const tgt = k.includes("rate") ? Math.round(v.target * 100) + "%" : v.target;
+      return `${mark} ${name}: ${cur} / ${tgt}`;
+    }).join("<br>") : "已达最高等级";
+    alert(`📊 Twin 信任仪表盘
+
+当前等级: ${data.level} - ${data.label}
+总任务数: ${data.total_tasks}
+总决策数: ${data.total_decisions}
+用户认可: ${data.approved} (${Math.round(data.approval_rate * 100)}%)
+被纠正: ${data.corrected} (${Math.round(data.correction_rate * 100)}%)
+
+表现最好: ${data.highest_performance}
+需要关注: ${data.needs_attention}
+
+升级到 ${data.next_level ? data.next_level.level + " " + data.next_level.label : "满级"} 要求:
+${nextReq}
+
+（详细 UI 开发中，这是简版提示）`);
+  } catch (e) { alert("获取信任数据失败: " + e.message); }
+}
+
+// ---------- 风险配置 ----------
+async function showRiskConfig() {
+  alert("⚠️ 风险规则配置页面开发中...\n\n当前支持通过 API 修改风险分级矩阵，高风险操作（写操作/越权/重查询/业务判断）始终会升级给用户确认。");
+}
+
+// ---------- 经验包管理 ----------
+async function showExperiencePacks() {
+  try {
+    const data = await (await fetch("/api/twin/experience")).json();
+    const l2 = (data.packs || []).length;
+    const l1 = (data.candidates || []).length;
+    alert(`📦 经验包管理
+
+已生效经验包 (L2): ${l2} 个
+候选经验包 (L1，待审核): ${l1} 个
+
+任务完成后 Twin 会自动提取可复用经验，审核通过后沉淀为个人经验包，后续类似任务自动复用。
+（详细管理页面开发中）`);
+  } catch (e) { alert("获取经验包失败: " + e.message); }
 }
 
 init();

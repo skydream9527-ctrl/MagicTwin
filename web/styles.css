@@ -107,6 +107,9 @@ button.primary:active { box-shadow: var(--shadow-1); }
 button.primary:disabled { background: #c3ccd9; color: #fff; box-shadow: none; cursor: default; }
 button.ghost { background: transparent; color: var(--muted); padding: 7px 14px; }
 button.ghost:hover { color: var(--primary); background: var(--surface-3); border-color: transparent; }
+button.ghost.small { padding: 4px 10px; font-size: 12px; border-radius: 8px; }
+
+.task-controls { display: flex; gap: 6px; margin-left: auto; }
 a.link { color: var(--primary); text-decoration: none; font-weight: 500; }
 a.link:hover { text-decoration: underline; }
 

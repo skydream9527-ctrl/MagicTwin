@@ -33,6 +33,9 @@
       <div class="side-sec-h">你的 Agent 团队</div>
       <div class="home-agents" id="homeAgents"></div>
       <a class="side-cfg link" href="/config.html">⚙️ 配置模型</a>
+      <a class="side-cfg link" href="#" onclick="showTrustDashboard();return false;">📊 信任仪表盘</a>
+      <a class="side-cfg link" href="#" onclick="showRiskConfig();return false;">⚠️ 风险规则配置</a>
+      <a class="side-cfg link" href="#" onclick="showExperiencePacks();return false;">📦 经验包管理</a>
     </aside>
 
     <!-- 主区：新任务入口 + 历史任务画廊 -->
@@ -68,6 +71,12 @@
       <div class="goal-bar">
         <span class="goal-label">目标</span>
         <span id="goalText"></span>
+        <div class="task-controls">
+          <button id="pauseBtn" class="ghost small hidden" onclick="pauseTask()">⏸️ 暂停</button>
+          <button id="resumeBtn" class="ghost small hidden" onclick="resumeTask()">▶️ 恢复</button>
+          <button id="abortBtn" class="ghost small hidden" onclick="abortTask()">⏹️ 终止</button>
+          <button id="downloadBtn" class="ghost small hidden" onclick="downloadBundle()">📦 下载产物</button>
+        </div>
       </div>
       <div id="agentStrip" class="agent-strip"></div>
       <div class="conv-head">

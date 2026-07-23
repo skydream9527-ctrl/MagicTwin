@@ -44,12 +44,31 @@ export const CONFIG = {
   // 需要调整就改这里或设环境变量 LLM_TIMEOUT_MS；超时/网络抖动仍会由编排层自动退避重试而非整体报错。
   llmTimeoutMs: Number(process.env.LLM_TIMEOUT_MS || 1800000),
 
+  // 上下文自动压缩（auto-compact）。
+  // 为每个 Agent 的对话上下文设 token 预算，超预算就「先归档旧查询结果、再 LLM 摘要中间段」，
+  // 把长任务（多轮真实取数）的上下文稳定在模型窗口内。可用环境变量覆盖。
+  compact: {
+    enabled: process.env.COMPACT_ENABLED !== "0",
+    triggerTokens: Number(process.env.COMPACT_TRIGGER_TOKENS || 48000),
+    keepRecentTurns: Number(process.env.COMPACT_KEEP_RECENT || 6),
+    keepRecentTools: Number(process.env.COMPACT_KEEP_TOOLS || 2),
+    charsPerToken: Number(process.env.COMPACT_CHARS_PER_TOKEN || 2.5),
+    model: process.env.COMPACT_MODEL || "",
+  },
+
   // 每日进化：定时归纳当天对话与错误，更新各 Agent 的 memory/LEARNINGS.md（见 engine/evolve.js）
   evolve: {
     enabled: process.env.EVOLVE_ENABLED !== "0",             // 默认开；设为 "0" 关闭内置定时器
     hour: Math.min(23, Math.max(0, Number(process.env.EVOLVE_HOUR || 23))), // 每天几点跑（本地时）
     model: process.env.EVOLVE_MODEL || process.env.TWIN_MODEL || "gpt-4o", // 归纳所用模型
     maxLearnings: Number(process.env.EVOLVE_MAX_LEARNINGS || 15), // LEARNINGS.md 条数上限
+  },
+
+  // Twin 画像蒸馏引擎：从外部工作空间文件自动提取用户画像（见 engine/distill.js）
+  distill: {
+    enabled: process.env.DISTILL_ENABLED !== "0",
+    workspacePath: process.env.DISTILL_WORKSPACE || "",
+    model: process.env.DISTILL_MODEL || process.env.TWIN_MODEL || "gpt-4o",
   },
 };
 
