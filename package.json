@@ -1,7 +1,7 @@
 {
   "name": "magictwin",
   "version": "0.1.0",
-  "description": "Twin（数字分身）代替用户驱动真实数据分析 Agent 与样式优化 Agent 协作的工作空间 Demo——真连 LLM 与数据平台查真实数据，全程可旁观、可回溯、可随时接管。",
+  "description": "由 Twin 主持多个 Agent、多个模型围绕热点、AI 话题与复杂任务进行研究、拆解、批判和综合的可回溯协作工作空间。",
   "keywords": [
     "agent",
     "multi-agent",
@@ -20,7 +20,9 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "evolve": "node server/jobs/evolve.js"
+    "evolve": "node server/jobs/evolve.js",
+    "test": "node --test test/*.test.js",
+    "test:smoke": "node --test test/smoke.test.js"
   },
   "engines": {
     "node": ">=18"

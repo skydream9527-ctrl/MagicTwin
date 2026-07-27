@@ -7,16 +7,17 @@
 //   prompts/      三个 Agent 的 system prompt 加载器（读 workspace 下的 agent.md）
 import http from "node:http";
 import { CONFIG } from "./config.js";
-import { hasKey } from "./integrations/llm.js";
+import { hasKey, llmBackend } from "./integrations/llm.js";
 import { handleRequest } from "./http/router.js";
 import { evolveAll } from "./engine/evolve.js";
 
 const server = http.createServer(handleRequest);
 
-server.listen(CONFIG.port, () => {
+server.listen(CONFIG.port, CONFIG.host, () => {
   console.log(`\n  MagicTwin 已启动`);
-  console.log(`  → http://localhost:${CONFIG.port}`);
-  console.log(`  LLM key: ${hasKey() ? "已就绪" : "未找到（请配置）"}`);
+  const displayHost = CONFIG.host === "0.0.0.0" || CONFIG.host === "::" ? "localhost" : CONFIG.host;
+  console.log(`  → http://${displayHost}:${CONFIG.port}`);
+  console.log(`  LLM: ${llmBackend() === "mock" ? "离线 Mock 模式" : hasKey() ? "已连接" : "未找到 key（请配置）"}`);
   console.log(`  默认模型 Twin=${CONFIG.twinModel}  数据Agent=${CONFIG.dataModel}  样式Agent=${CONFIG.styleModel}`);
   console.log(`  数据查询: ${CONFIG.dataQuery.backend === "sample" ? "演示模式（示例数据）" : "已接入真实数据源"}`);
   scheduleDailyEvolve();

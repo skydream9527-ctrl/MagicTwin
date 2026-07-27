@@ -15,6 +15,7 @@
 //   - 强制超时（默认 30s，可设 SANDBOX_TIMEOUT_MS）
 //   - 代码通过 stdin 传入，避免命令注入
 //   - 生产环境强烈建议用 SANDBOX_COMMAND 接 Docker / gVisor / 远程沙箱服务
+import "../env.js";
 import { spawn } from "node:child_process";
 
 const ENABLED = process.env.SANDBOX_ENABLED === "1" || process.env.SANDBOX_ENABLED === "true";

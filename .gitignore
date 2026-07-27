@@ -34,6 +34,8 @@ workspace/users/u_local/twin/profile.md
 # 属于运行时记忆，各部署环境独立，不进 Git（如需共享经验可手动复制）。
 workspace/agents/*/memory/
 workspace/users/*/twin/memory/
+# Twin 信任等級與決策統計屬於每個本機使用者的運行時狀態，不同步到 GitHub。
+workspace/users/*/twin/knowledge/rules/trust.json
 
 # ---------- 操作系统 ----------
 .DS_Store

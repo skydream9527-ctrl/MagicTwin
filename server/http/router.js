@@ -8,7 +8,8 @@
 //   POST /api/agent-config        → 保存模型配置（任意数量 Agent）
 //   GET  /api/tasks               → 历史任务列表（可回溯）
 //   POST /api/task {goal, models?, team?} → 创建任务，返回 {tid}
-//   GET  /api/task/:tid           → {meta, events, decisions, thinking}（回放/审计/思考）
+//   GET  /api/task/:tid           → {meta, events, decisions, thinking, usage}（回放/审计/思考/用量）
+//   GET  /api/task/:tid/usage     → Token 用量聚合（总量 / Agent / 模型）
 //   GET  /api/task/:tid/stream    → SSE：连接即启动编排，实时推事件
 //   POST /api/task/:tid/reply   {text}      → 回复 Twin 升级上来的问题（→ 注入到 twin）
 //   POST /api/task/:tid/inject  {to,text}   → 用户在主对话区 @ 某方插话（to = twin 或任一工具 Agent key）
@@ -27,10 +28,10 @@
 //   POST /api/risk-config         → 保存风险分级矩阵配置
 //   POST /api/task/:tid/feedback  → 对 Twin 决策的反馈（用于信任校准）
 import { CONFIG, RECOMMENDED_MODELS } from "../config.js";
-import { hasKey, listModels } from "../integrations/llm.js";
+import { hasKey, listModels, llmBackend } from "../integrations/llm.js";
 import { hasRealBackend } from "../integrations/data-query.js";
 import { isSandboxEnabled } from "../integrations/sandbox.js";
-import { createTask, getMeta, updateMeta, readEvents, readDecisions, readThinking, listTasks, getAgentConfig, saveAgentConfig, getTaskBundle, appendFeedback } from "../domain/store.js";
+import { createTask, getMeta, updateMeta, readEvents, readDecisions, readThinking, summarizeUsage, listTasks, getAgentConfig, saveAgentConfig, getTaskBundle, appendFeedback } from "../domain/store.js";
 import { getAgentList, getAgentDetail } from "../domain/agents.js";
 import { ROSTER, isToolAgentKey, defaultModelFor, getDispatchableAgents, AGENT_KEYS } from "../domain/roster.js";
 import { runTwinInquiry } from "../engine/orchestrator.js";
@@ -56,11 +57,13 @@ function readBody(req) {
   });
 }
 
-// 组装「每个 Agent 当前使用的模型」映射：保存的配置 > 该 Agent 默认模型。
+// 组装「每个 Agent 当前使用的模型」映射：
+// 保存的配置 > 集中配置（含 Mock 模式）> roster 默认模型。
 function resolvedConfigMap() {
-  const saved = getAgentConfig() || {};
+  // Mock 模式必须完整隔离真实网关配置，避免本地已保存的模型名污染离线测试。
+  const saved = llmBackend() === "mock" ? {} : (getAgentConfig() || {});
   const out = {};
-  for (const a of ROSTER) out[a.key] = saved[a.key] || defaultModelFor(a.key);
+  for (const a of ROSTER) out[a.key] = saved[a.key] || CONFIG.models[a.key] || defaultModelFor(a.key);
   return out;
 }
 
@@ -71,6 +74,7 @@ export async function handleRequest(req, res) {
   if (path === "/api/health" && method === "GET") {
     return sendJson(res, 200, {
       hasKey: hasKey(),
+      llm: { backend: llmBackend() },
       models: resolvedConfigMap(),
       dataQuery: { backend: CONFIG.dataQuery.backend, real: hasRealBackend() },
       sandbox: { enabled: isSandboxEnabled() },
@@ -78,7 +82,11 @@ export async function handleRequest(req, res) {
   }
   if (path === "/api/models" && method === "GET") {
     const all = await listModels();
-    return sendJson(res, 200, { recommended: RECOMMENDED_MODELS, all, defaults: resolvedConfigMap() });
+    const preferred = RECOMMENDED_MODELS.filter((model) => all.includes(model));
+    const recommended = llmBackend() === "mock"
+      ? ["mock/magictwin"]
+      : (preferred.length ? preferred : all);
+    return sendJson(res, 200, { recommended, all, defaults: resolvedConfigMap() });
   }
   // Agent 详情：概览列表 + 单个 Agent 的元信息与关联文件（人设 Prompt / 知识库 / 技能包）
   if (path === "/api/agents" && method === "GET") {
@@ -123,7 +131,8 @@ export async function handleRequest(req, res) {
     const team = Array.isArray(body.team)
       ? [...new Set(body.team)].filter((k) => typeof k === "string" && k !== "twin" && dispatchable.has(k))
       : [];
-    const meta = createTask(goal, models, team);
+    const mode = body.mode === "discussion" ? "discussion" : "task";
+    const meta = createTask(goal, models, team, mode);
     rt(meta.tid).fresh = true; // 仅本进程新建的任务才允许启动编排
     return sendJson(res, 200, { tid: meta.tid });
   }
@@ -133,7 +142,20 @@ export async function handleRequest(req, res) {
     const tid = mTask[1];
     const meta = getMeta(tid);
     if (!meta) return sendJson(res, 404, { error: "task not found" });
-    return sendJson(res, 200, { meta, events: readEvents(tid), decisions: readDecisions(tid), thinking: readThinking(tid) });
+    return sendJson(res, 200, {
+      meta,
+      events: readEvents(tid),
+      decisions: readDecisions(tid),
+      thinking: readThinking(tid),
+      usage: summarizeUsage(tid),
+    });
+  }
+
+  const mUsage = path.match(/^\/api\/task\/([^/]+)\/usage$/);
+  if (mUsage && method === "GET") {
+    const tid = mUsage[1];
+    if (!getMeta(tid)) return sendJson(res, 404, { error: "task not found" });
+    return sendJson(res, 200, summarizeUsage(tid));
   }
 
   // 回复 Twin 升级上来的高风险问题 → 作为一条 reply 注入到 twin

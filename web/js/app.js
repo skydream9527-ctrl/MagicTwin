@@ -2,10 +2,12 @@
 // $ / el / esc 来自 shared/dom.js；renderMarkdown / mdInline 来自 shared/markdown.js；
 // AGENT_ROSTER / AGENT_KEYS / AGENT_META 来自 shared/roster.js（均以 classic script 先于本文件加载）
 
+const DISCUSSION_TEAM = ["researcher", "concept", "critic", "style"];
 const STARTERS = [
-  "看看内容中心最近一周消费时长有没有异常，帮我定位下",
-  "内容中心最近 7 天 DAU 趋势，跌了的话按体裁拆一下",
-  "对比最近一周和上一周内容中心的人均消费时长",
+  "分析当前 AI Agent 市场的热点方向：哪些是真趋势，哪些可能只是短期泡沫？",
+  "讨论什么是 Context Engineering：它和 Prompt Engineering、RAG 有什么本质区别？",
+  "多 Agent 系统什么时候会优于单 Agent？请讨论收益、协作成本和失败条件。",
+  "比较 RAG、长上下文与 Agentic Search：它们分别适合解决什么问题？",
 ];
 // @ 提及展示用的名称：从 roster 派生，外加 "user"（你）这个虚拟 target
 const TARGET_FULL = Object.fromEntries(AGENT_ROSTER.map((a) => [a.key, a.name]));
@@ -15,6 +17,10 @@ const ARROW = `<span class="arrow">→</span>`;
 
 let es = null;
 let curTid = null;
+let curMode = "discussion";
+let curTeam = [...DISCUSSION_TEAM];
+let curUsage = null;
+let usageRefreshTimer = null;
 // 当前任务的模型映射，键为 agent key（任意 roster 中的 Agent 都可能出现）
 let curModels = {};
 const pendingEcho = []; // 本地已乐观回显、等待服务端事件去重的插话 {to,text}
@@ -26,7 +32,10 @@ let curConfig = {};
 async function init() {
   try {
     const h = await (await fetch("/api/health")).json();
-    const m = $("#healthLLM"); m.textContent = h.hasKey ? "LLM 已连接" : "LLM 未配置"; m.className = "chip " + (h.hasKey ? "ok" : "bad");
+    const isMock = h.llm?.backend === "mock";
+    const m = $("#healthLLM");
+    m.textContent = isMock ? "LLM Mock" : h.hasKey ? "LLM 已连接" : "LLM 未配置";
+    m.className = "chip " + (h.hasKey ? "ok" : "bad");
     const d = $("#healthDataQuery"); d.textContent = h.dataQuery?.real ? "数据源已连接" : "演示模式"; d.className = "chip " + (h.dataQuery?.real ? "ok" : "");
   } catch {}
 
@@ -34,15 +43,26 @@ async function init() {
   STARTERS.forEach((s) => { const c = el("span", "starter", esc(s)); c.onclick = () => { $("#goalInput").value = s; }; box.appendChild(c); });
   $("#startBtn").onclick = start;
   $("#newTaskBtn").onclick = () => location.reload();
-  $("#artifactsBtn").onclick = () => { if (curTid) window.open(`/artifacts.html?tid=${curTid}`, "_blank"); };
+  $("#artifactsBtn").onclick = () => showDetailsDrawer("artifacts");
+  $("#artifactsOpenFull").onclick = () => { if (curTid) window.open(`/artifacts.html?tid=${curTid}`, "_blank"); };
+  $("#tokenUsageChip").onclick = () => { showDetailsDrawer("usage"); refreshUsage(); };
 
   // 主对话区 @ 提及插话
   $("#injectSend").onclick = doInject;
   $("#injectInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doInject(); });
-  // 副对话区：与 Twin 私聊（常驻，按钮可折叠/展开）
-  $("#sideToggle").onclick = () => $("#sidePanel").classList.toggle("hidden");
+  // Twin 私聊与过程产物共用浮动详情面板。
+  $("#sideToggle").onclick = () => {
+    if ($("#sidePanel").classList.contains("hidden")) showDetailsDrawer("twin");
+    else closeDetailsDrawer();
+  };
+  $("#sideClose").onclick = closeDetailsDrawer;
+  $("#drawerTwinTab").onclick = () => showDetailsDrawer("twin");
+  $("#drawerArtifactsTab").onclick = () => showDetailsDrawer("artifacts");
+  $("#drawerUsageTab").onclick = () => { showDetailsDrawer("usage"); refreshUsage(); };
   $("#sideSend").onclick = doInquiry;
   $("#sideInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doInquiry(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDetailsDrawer(); });
+  initDrawerInteraction();
 
   renderHomeAgents();
   renderUseModelsChips();   // 「本次使用」chips：从 roster 动态生成
@@ -54,7 +74,8 @@ async function init() {
 // 渲染首页「本次使用」模型 chips（动态从 roster 派生，避免硬编码 twin/data/style）
 function renderUseModelsChips() {
   const box = $("#useModels"); if (!box) return;
-  box.innerHTML = AGENT_ROSTER.map((a) =>
+  const activeKeys = new Set(["twin", ...DISCUSSION_TEAM]);
+  box.innerHTML = AGENT_ROSTER.filter((a) => activeKeys.has(a.key)).map((a) =>
     `<span class="um-chip" id="um-${a.key}" title="${esc(a.name)} · 当前模型">${esc(shortName(a.name))} …</span>`
   ).join("");
 }
@@ -100,7 +121,7 @@ async function loadHistory() {
   try {
     const { tasks } = await (await fetch("/api/tasks")).json();
     const box = $("#historyList"); box.innerHTML = "";
-    if (!tasks.length) { box.appendChild(el("div", "muted", "还没有任务，先在上面布置一个吧")); return; }
+    if (!tasks.length) { box.appendChild(el("div", "muted", "还没有讨论，先发起一个议题吧")); return; }
     tasks.slice(0, 12).forEach((t) => {
       const card = el("div", "history-item");
       card.innerHTML = `<div class="hi-goal">${esc(t.goal)}</div><div class="hi-meta"><span class="badge ${t.status}">${esc(t.status)}</span><span class="hi-date">${fmtWhen(t.createdAt)}</span></div>`;
@@ -111,6 +132,189 @@ async function loadHistory() {
 }
 function fmtWhen(iso) { try { const d = new Date(iso); const p = (n) => String(n).padStart(2, "0"); return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; } catch { return ""; } }
 
+function showDetailsDrawer(pane = "twin") {
+  const isTwin = pane === "twin";
+  const isArtifacts = pane === "artifacts";
+  const isUsage = pane === "usage";
+  $("#sidePanel").classList.remove("hidden");
+  // 详情面板是非阻塞工作区：主对话仍可点击，只有明确的关闭按钮 / Esc 会关闭。
+  $("#drawerScrim").classList.add("hidden");
+  $("#drawerTwinPane").classList.toggle("hidden", !isTwin);
+  $("#drawerArtifactsPane").classList.toggle("hidden", !isArtifacts);
+  $("#drawerUsagePane").classList.toggle("hidden", !isUsage);
+  $("#drawerTwinTab").classList.toggle("active", isTwin);
+  $("#drawerArtifactsTab").classList.toggle("active", isArtifacts);
+  $("#drawerUsageTab").classList.toggle("active", isUsage);
+  $("#drawerTwinTab").setAttribute("aria-selected", String(isTwin));
+  $("#drawerArtifactsTab").setAttribute("aria-selected", String(isArtifacts));
+  $("#drawerUsageTab").setAttribute("aria-selected", String(isUsage));
+  $("#sideToggle").setAttribute("aria-expanded", "true");
+  if (isUsage) renderUsage(curUsage);
+  requestAnimationFrame(clampDrawerIntoViewport);
+}
+function closeDetailsDrawer() {
+  $("#sidePanel").classList.add("hidden");
+  $("#drawerScrim").classList.add("hidden");
+  $("#sideToggle").setAttribute("aria-expanded", "false");
+}
+
+// ---------- 浮动详情面板：拖动 / 缩放 / 位置记忆 ----------
+const DRAWER_STATE_KEY = "magictwin.drawer.geometry.v1";
+let drawerDrag = null;
+let drawerResize = null;
+
+function isDesktopDrawer() {
+  return window.matchMedia("(min-width: 761px)").matches;
+}
+
+function saveDrawerGeometry() {
+  const panel = $("#sidePanel");
+  if (!panel || panel.classList.contains("hidden") || !isDesktopDrawer()) return;
+  const rect = panel.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return;
+  try {
+    localStorage.setItem(DRAWER_STATE_KEY, JSON.stringify({
+      left: Math.round(rect.left),
+      top: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    }));
+  } catch {}
+}
+
+function restoreDrawerGeometry() {
+  const panel = $("#sidePanel");
+  if (!panel || !isDesktopDrawer()) return;
+  try {
+    const saved = JSON.parse(localStorage.getItem(DRAWER_STATE_KEY) || "null");
+    if (!saved || ![saved.left, saved.top, saved.width, saved.height].every(Number.isFinite)) return;
+    panel.style.left = `${saved.left}px`;
+    panel.style.top = `${saved.top}px`;
+    panel.style.right = "auto";
+    panel.style.bottom = "auto";
+    panel.style.width = `${saved.width}px`;
+    panel.style.height = `${saved.height}px`;
+  } catch {}
+}
+
+function clampDrawerIntoViewport() {
+  const panel = $("#sidePanel");
+  if (!panel || panel.classList.contains("hidden") || !isDesktopDrawer()) return;
+  const rect = panel.getBoundingClientRect();
+  const width = Math.min(rect.width, window.innerWidth - 16);
+  const height = Math.min(rect.height, window.innerHeight - 16);
+  const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8));
+  const top = Math.min(Math.max(8, rect.top), Math.max(8, window.innerHeight - height - 8));
+  panel.style.left = `${left}px`;
+  panel.style.top = `${top}px`;
+  panel.style.right = "auto";
+  panel.style.bottom = "auto";
+  panel.style.width = `${width}px`;
+  panel.style.height = `${height}px`;
+}
+
+function initDrawerInteraction() {
+  const panel = $("#sidePanel");
+  const handle = $("#drawerDragHandle");
+  const resizeHandle = $("#drawerResizeHandle");
+  if (!panel || !handle || !resizeHandle) return;
+  restoreDrawerGeometry();
+
+  handle.addEventListener("pointerdown", (event) => {
+    if (!isDesktopDrawer() || event.button !== 0 || event.target.closest("button, input, select, a")) return;
+    const rect = panel.getBoundingClientRect();
+    drawerDrag = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      left: rect.left,
+      top: rect.top,
+    };
+    panel.style.left = `${rect.left}px`;
+    panel.style.top = `${rect.top}px`;
+    panel.style.right = "auto";
+    panel.style.bottom = "auto";
+    panel.style.width = `${rect.width}px`;
+    panel.style.height = `${rect.height}px`;
+    panel.classList.add("drawer-dragging");
+    handle.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+
+  const moveDrawer = (event) => {
+    if (!drawerDrag || event.pointerId !== drawerDrag.pointerId) return;
+    const rect = panel.getBoundingClientRect();
+    const nextLeft = drawerDrag.left + event.clientX - drawerDrag.startX;
+    const nextTop = drawerDrag.top + event.clientY - drawerDrag.startY;
+    panel.style.left = `${Math.min(Math.max(8, nextLeft), Math.max(8, window.innerWidth - rect.width - 8))}px`;
+    panel.style.top = `${Math.min(Math.max(8, nextTop), Math.max(8, window.innerHeight - rect.height - 8))}px`;
+    event.preventDefault();
+  };
+  window.addEventListener("pointermove", moveDrawer);
+
+  const finishDrag = (event) => {
+    if (!drawerDrag || event.pointerId !== drawerDrag.pointerId) return;
+    handle.releasePointerCapture?.(event.pointerId);
+    drawerDrag = null;
+    panel.classList.remove("drawer-dragging");
+    saveDrawerGeometry();
+  };
+  window.addEventListener("pointerup", finishDrag);
+  window.addEventListener("pointercancel", finishDrag);
+
+  resizeHandle.addEventListener("pointerdown", (event) => {
+    if (!isDesktopDrawer() || event.button !== 0) return;
+    const rect = panel.getBoundingClientRect();
+    drawerResize = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      width: rect.width,
+      height: rect.height,
+      left: rect.left,
+      top: rect.top,
+    };
+    panel.style.left = `${rect.left}px`;
+    panel.style.top = `${rect.top}px`;
+    panel.style.right = "auto";
+    panel.style.bottom = "auto";
+    panel.style.width = `${rect.width}px`;
+    panel.style.height = `${rect.height}px`;
+    resizeHandle.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+    event.stopPropagation();
+  });
+
+  const resizeDrawer = (event) => {
+    if (!drawerResize || event.pointerId !== drawerResize.pointerId) return;
+    const maxWidth = Math.max(320, window.innerWidth - drawerResize.left - 8);
+    const maxHeight = Math.max(340, window.innerHeight - drawerResize.top - 8);
+    const width = Math.min(maxWidth, Math.max(320, drawerResize.width + event.clientX - drawerResize.startX));
+    const height = Math.min(maxHeight, Math.max(340, drawerResize.height + event.clientY - drawerResize.startY));
+    panel.style.width = `${width}px`;
+    panel.style.height = `${height}px`;
+    event.preventDefault();
+  };
+  window.addEventListener("pointermove", resizeDrawer);
+
+  const finishResize = (event) => {
+    if (!drawerResize || event.pointerId !== drawerResize.pointerId) return;
+    resizeHandle.releasePointerCapture?.(event.pointerId);
+    drawerResize = null;
+    saveDrawerGeometry();
+  };
+  window.addEventListener("pointerup", finishResize);
+  window.addEventListener("pointercancel", finishResize);
+
+  if ("ResizeObserver" in window) {
+    const observer = new ResizeObserver(() => {
+      if (!drawerDrag && !drawerResize) saveDrawerGeometry();
+    });
+    observer.observe(panel);
+  }
+  window.addEventListener("resize", () => requestAnimationFrame(clampDrawerIntoViewport));
+}
+
 async function start() {
   const goal = $("#goalInput").value.trim();
   if (!goal) return;
@@ -118,17 +322,34 @@ async function start() {
   const models = { ...curConfig };
   $("#startBtn").disabled = true;
   try {
-    const r = await (await fetch("/api/task", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ goal, models }) })).json();
+    const team = [...DISCUSSION_TEAM];
+    const r = await (await fetch("/api/task", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ goal, models, mode: "discussion", team }),
+    })).json();
     if (r.error) { alert(r.error); $("#startBtn").disabled = false; return; }
     curModels = { ...models };
+    curMode = "discussion";
+    curTeam = team;
     enterWorkspace(goal); connect(r.tid);
   } catch (e) { alert("启动失败：" + e.message); $("#startBtn").disabled = false; }
 }
 
 async function openTask(tid) {
-  let goal = "", models = {};
-  try { const d = await (await fetch(`/api/task/${tid}`)).json(); goal = d.meta?.goal || ""; models = { ...(d.meta?.models || {}) }; } catch {}
-  curModels = models; enterWorkspace(goal); connect(tid);
+  let goal = "", models = {}, mode = "task", team = [];
+  try {
+    const d = await (await fetch(`/api/task/${tid}`)).json();
+    goal = d.meta?.goal || "";
+    models = { ...(d.meta?.models || {}) };
+    mode = d.meta?.mode || "task";
+    team = Array.isArray(d.meta?.team) ? d.meta.team : [];
+  } catch {}
+  curModels = models;
+  curMode = mode;
+  curTeam = team;
+  enterWorkspace(goal);
+  connect(tid);
 }
 
 function enterWorkspace(goal) {
@@ -138,13 +359,20 @@ function enterWorkspace(goal) {
   $("#newTaskBtn").classList.remove("hidden");
   $("#artifactsBtn").classList.remove("hidden");
   $("#sideToggle").classList.remove("hidden");
-  $("#sidePanel").classList.remove("hidden");
+  $("#tokenUsageChip").classList.remove("hidden");
+  $("#tokenUsageChip").textContent = "Tokens 0";
+  curUsage = null;
+  lastStyled = null;
+  renderUsage(null);
   $("#goalText").textContent = goal;
   $("#feed").innerHTML = "";
   $("#sideFeed").innerHTML = `<div class="muted" style="font-size:12.5px">在这里随时问 Twin：进度到哪了？你替我做了哪些决定？（不会打断主流程）</div>`;
   pendingEcho.length = 0;
-  // Agent 状态条：从 roster 动态渲染（任意 roster 中的 Agent 都自动出现）
-  $("#agentStrip").innerHTML = AGENT_ROSTER.map((a) =>
+  if (window.matchMedia("(min-width: 1180px)").matches) showDetailsDrawer("twin");
+  else closeDetailsDrawer();
+  // Agent 状态条只展示本次圆桌成员；旧任务没有 team 时仍展示完整花名册。
+  const activeKeys = curTeam.length ? new Set(["twin", ...curTeam]) : null;
+  $("#agentStrip").innerHTML = AGENT_ROSTER.filter((a) => !activeKeys || activeKeys.has(a.key)).map((a) =>
     agentCardHtml(a.key, a.icon, a.name, curModels[a.key])
   ).join("");
 }
@@ -152,9 +380,14 @@ function enterWorkspace(goal) {
 function goHome() {
   if (es) { es.close(); es = null; }
   curTid = null;
+  curMode = "discussion";
+  curTeam = [...DISCUSSION_TEAM];
+  curUsage = null;
+  if (usageRefreshTimer) { clearTimeout(usageRefreshTimer); usageRefreshTimer = null; }
   $("#workspace").classList.add("hidden");
   $("#startScreen").classList.remove("hidden");
-  ["homeBtn", "sideToggle", "artifactsBtn", "newTaskBtn"].forEach((id) => $("#" + id).classList.add("hidden"));
+  ["homeBtn", "sideToggle", "artifactsBtn", "newTaskBtn", "tokenUsageChip"].forEach((id) => $("#" + id).classList.add("hidden"));
+  closeDetailsDrawer();
   setStatus(null);
   $("#startBtn").disabled = false;
   loadHistory();
@@ -170,9 +403,15 @@ function resetAgents() { AGENT_KEYS.forEach((k) => setAgentStatus(k, "待命", f
 // ---------- SSE ----------
 function connect(tid) {
   curTid = tid;
+  refreshUsage();
   if (es) es.close();
   es = new EventSource(`/api/task/${tid}/stream`);
-  es.onmessage = (ev) => { let d; try { d = JSON.parse(ev.data); } catch { return; } handle(d); };
+  es.onmessage = (ev) => {
+    let d;
+    try { d = JSON.parse(ev.data); } catch { return; }
+    handle(d);
+    scheduleUsageRefresh(d.control === "done" || d.control === "idle" ? 0 : 300);
+  };
   es.onerror = () => {
     // 连接断开（服务重启 / 网络抖动）。CONNECTING 时 EventSource 会自行重试；
     // 若已 CLOSED（不再自动重连），延时主动重建，确保前端与后端持续同步、不落后、能收到 Twin 回应。
@@ -188,6 +427,86 @@ function setStatus(s) {
   b.textContent = s;
   b.classList.remove("hidden");
   updateControlButtons(s);
+}
+
+// ---------- Token 用量统计 ----------
+function formatTokens(value) {
+  const n = Number(value) || 0;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 100_000 ? 0 : 1)}K`;
+  return String(n);
+}
+
+function formatLatency(value) {
+  const ms = Number(value) || 0;
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+}
+
+function usageRows(items, type) {
+  return (items || []).map((item) => {
+    const key = type === "agent" ? item.actor : item.model;
+    const label = type === "agent"
+      ? (AGENT_META[key]?.name || key || "未知 Agent")
+      : (key || "未知模型");
+    const model = type === "agent" ? (curModels[key] || "") : "";
+    return `<div class="usage-row">
+      <span class="usage-row-name" title="${esc(label)}">${esc(label)}</span>
+      <span class="usage-row-value">${formatTokens(item.totalTokens)}</span>
+      <span class="usage-row-meta">${item.calls} 次调用 · 输入 ${formatTokens(item.promptTokens)} · 输出 ${formatTokens(item.completionTokens)}${model ? ` · ${esc(model)}` : ""}</span>
+    </div>`;
+  }).join("");
+}
+
+function renderUsage(usage) {
+  const box = $("#usageStats");
+  if (!box) return;
+  const total = usage?.total;
+  if (!total || total.calls === 0) {
+    box.innerHTML = `<div class="usage-empty">任务开始后，这里会显示总 Token、输入/输出以及各 Agent 与模型的消耗。</div>`;
+    return;
+  }
+  const detail = [
+    total.cachedTokens ? `缓存 ${formatTokens(total.cachedTokens)}` : "",
+    total.reasoningTokens ? `推理 ${formatTokens(total.reasoningTokens)}` : "",
+    total.unmeteredCalls ? `${total.unmeteredCalls} 次未返回计量` : "",
+  ].filter(Boolean).join(" · ");
+  box.innerHTML = `
+    <div class="usage-summary">
+      <div class="usage-metric primary"><span>总 Token</span><strong>${formatTokens(total.totalTokens)}</strong></div>
+      <div class="usage-metric"><span>输入 Token</span><strong>${formatTokens(total.promptTokens)}</strong></div>
+      <div class="usage-metric"><span>输出 Token</span><strong>${formatTokens(total.completionTokens)}</strong></div>
+      <div class="usage-metric"><span>模型调用</span><strong>${total.calls}</strong></div>
+      <div class="usage-metric"><span>累计延迟</span><strong>${formatLatency(total.latencyMs)}</strong></div>
+    </div>
+    ${detail ? `<div class="usage-row-meta" style="margin:9px 2px 0">${esc(detail)}</div>` : ""}
+    <div class="usage-section-title">按 Agent</div>
+    <div class="usage-list">${usageRows(usage.byAgent, "agent")}</div>
+    <div class="usage-section-title">按模型</div>
+    <div class="usage-list">${usageRows(usage.byModel, "model")}</div>`;
+}
+
+async function refreshUsage() {
+  const tid = curTid;
+  if (!tid) return;
+  try {
+    const response = await fetch(`/api/task/${tid}/usage`, { cache: "no-store" });
+    if (!response.ok) return;
+    const usage = await response.json();
+    if (curTid !== tid) return;
+    curUsage = usage;
+    renderUsage(usage);
+    const total = usage?.total?.totalTokens || 0;
+    $("#tokenUsageChip").textContent = `Tokens ${formatTokens(total)}`;
+    $("#tokenUsageChip").title = `输入 ${formatTokens(usage?.total?.promptTokens)} · 输出 ${formatTokens(usage?.total?.completionTokens)} · ${usage?.total?.calls || 0} 次调用`;
+  } catch {}
+}
+
+function scheduleUsageRefresh(delay = 300) {
+  if (usageRefreshTimer) clearTimeout(usageRefreshTimer);
+  usageRefreshTimer = setTimeout(() => {
+    usageRefreshTimer = null;
+    refreshUsage();
+  }, delay);
 }
 
 // ---------- 事件处理（主对话区进 feed，side 频道进侧栏）----------
@@ -226,13 +545,17 @@ function handle(d) {
     setAgentStatus(actor, querying ? "正在查询…" : "待命", querying);
   }
 
-  if (actor === "user" && kind === "goal") return add(userBubble("你 · 目标", d.text));
+  if (actor === "user" && kind === "goal") return add(userBubble(curMode === "discussion" ? "你 · 议题" : "你 · 目标", d.text));
   if (actor === "user" && kind === "reply") return add(injectBubble("twin", d.text, "回复"));
   if (actor === "user" && kind === "inject") { if (consumedByEcho(d.to, d.text)) return; return add(injectBubble(d.to, d.text)); }
   // Twin 的派活/回复/打回：to 字段是目标 Agent key（不再硬编码 "data"）
-  if (actor === "twin" && kind === "assign") { setStatus("执行中"); return add(routedBubble("twin", "◆", "Twin", d.to, "派发任务", d.text)); }
+  if (actor === "twin" && kind === "assign") {
+    setStatus("执行中");
+    return add(routedBubble("twin", "◆", "Twin", d.to, d.parallel ? "并行派发" : "派发任务", d.text));
+  }
   if (actor === "twin" && kind === "answer") return add(answerCard(d));
   if (actor === "twin" && kind === "rework") return add(routedBubble("twin", "◆", "Twin", d.to, "打回重做", d.text));
+  if (actor === "twin" && kind === "synthesis") return add(synthesisCard(d));
   if (actor === "twin" && kind === "beautify") return add(routedBubble("twin", "◆", "Twin", d.to || "style", "转交排版", d.text));
   if (actor === "twin" && kind === "deliver") { setStatus("已交付"); return add(deliverCard(d)); }
   if (actor === "twin" && kind === "escalate") { setStatus("待确认"); return add(escalateCard(d)); }
@@ -282,6 +605,34 @@ function styledCard(d, actor = "style") {
     ${hls ? `<div class="styled-highlights">${hls}</div>` : ""}
     ${secs}</div>`;
   return c;
+}
+function synthesisAsStyled(synthesis = {}) {
+  const sections = [
+    { heading: "共识结论", bullets: synthesis.consensus || [] },
+    { heading: "核心分歧", bullets: synthesis.differences || [] },
+    { heading: "反例与风险", bullets: synthesis.risks || [] },
+    { heading: "不确定性", bullets: synthesis.uncertainties || [] },
+    { heading: "下一步建议", bullets: synthesis.recommendations || [] },
+  ].filter((section) => section.bullets.length);
+  return {
+    title: synthesis.title || "Twin 综合结论",
+    summary: synthesis.summary || "",
+    highlights: [],
+    sections,
+  };
+}
+function synthesisCard(d) {
+  const synthesis = d.synthesis || d;
+  const view = synthesisAsStyled(synthesis);
+  const sections = view.sections.map((section) =>
+    `<div class="styled-sec"><h5>${esc(section.heading)}</h5><ul>${section.bullets.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>`
+  ).join("");
+  const card = el("div", "card synthesis");
+  card.innerHTML = `<div class="card-h">◆ Twin ${ARROW} ${atTag(d.to || "style")} · 总结果汇总</div><div class="card-b">
+    <div class="styled-title">${esc(view.title)}</div>
+    ${view.summary ? `<div class="styled-tldr">${esc(view.summary)}</div>` : ""}
+    ${sections}</div>`;
+  return card;
 }
 function confirmCard(d, actor = "data") {
   const meta = AGENT_META[actor] || { name: actor, icon: "■" };
@@ -352,8 +703,13 @@ function attachToolResult(d) {
 function deliverCard(d) {
   const c = el("div", "card deliver");
   const decs = (d.decisions || []).map((x) => `<div class="dec"><span class="q">${esc(x.question || "")}</span> → <span class="a">${esc(x.answer || "")}</span>${x.reason ? ` <span class="muted">（${esc(x.reason)}）</span>` : ""}</div>`).join("");
-  const steps = (d.next_steps || []).map((s) => `<li>${esc(s)}</li>`).join("");
-  const s = d.styled || lastStyled; // 优先用交付事件自带的排版稿，否则用前端记住的最近一份
+  const hasSynthesisSteps = Array.isArray(d.synthesis?.recommendations) && d.synthesis.recommendations.length > 0;
+  const steps = (hasSynthesisSteps ? [] : (d.next_steps || [])).map((s) => `<li>${esc(s)}</li>`).join("");
+  // 最终内容以 Twin 的 synthesis 为唯一真相源；Style 只能贡献高亮等视觉信息，不能覆盖或删改结论。
+  const twinView = d.synthesis ? synthesisAsStyled(d.synthesis) : null;
+  const s = twinView
+    ? { ...twinView, highlights: lastStyled?.highlights || [] }
+    : (d.styled || lastStyled);
   let body;
   if (s && (s.title || s.summary || (s.sections || []).length || (s.highlights || []).length)) {
     // 复用样式优化 Agent 的高亮排版：标题 / TL;DR / 关键数字高亮 / 分节
@@ -393,7 +749,7 @@ function addSide(role, text) {
 }
 function showSideTyping() {
   const box = $("#sideFeed"); if (!box || sideTypingEl) return;
-  $("#sidePanel").classList.remove("hidden"); // Twin 开始作答时确保侧栏可见
+  showDetailsDrawer("twin");
   sideTypingEl = el("div", "side-msg twin", `<span class="typing"><i></i><i></i><i></i></span>`);
   box.appendChild(sideTypingEl); box.scrollTop = box.scrollHeight;
 }
@@ -428,7 +784,7 @@ async function doInquiry() {
   const input = $("#sideInput"); const question = input.value.trim();
   if (!question || !curTid) return;
   input.value = "";
-  $("#sidePanel").classList.remove("hidden");
+  showDetailsDrawer("twin");
   try {
     const res = await fetch(`/api/task/${curTid}/inquiry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) });
     if (!res.ok) { const j = await res.json().catch(() => ({})); addSide("twin", `（未能送达：${esc(j.error || res.status)}）`); }

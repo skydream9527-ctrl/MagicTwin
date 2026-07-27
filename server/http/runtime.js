@@ -67,6 +67,7 @@ export function startOrchestration(tid) {
   r.promise = runOrchestration({
     tid,
     goal: meta.goal,
+    mode: meta.mode || "task",
     models: meta.models,
     team: meta.team || [],
     resumeEvents,

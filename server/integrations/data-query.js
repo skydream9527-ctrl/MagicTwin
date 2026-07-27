@@ -9,6 +9,7 @@
 //   3. 直接修改本文件底部的 adapter 实现（参考 SQLite 适配器注释）
 //
 // 安全：只允许 SELECT / WITH...SELECT，硬拒 DDL/DML/多语句。
+import "../env.js";
 import { execFile } from "node:child_process";
 
 const FORBIDDEN = /\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|MERGE|GRANT|REVOKE|CALL|REPLACE|SET|USE)\b/i;

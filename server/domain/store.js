@@ -31,6 +31,7 @@ const AGENT_MEMORY = Object.fromEntries(
 export function agentMemoryDir(key) { return AGENT_MEMORY[key] || null; }
 
 function mirrorToAgent(actor, file, record, tid) {
+  if (process.env.MIRROR_AGENT_MEMORY === "0") return;
   const dir = AGENT_MEMORY[actor];
   if (!dir) return;
   try { ensureDir(dir); appendFileSync(join(dir, file), JSON.stringify({ ...record, tid }) + "\n"); } catch {}
@@ -43,13 +44,23 @@ function newTid() {
   return `${stamp}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
-export function createTask(goal, models = {}, team = []) {
+export function createTask(goal, models = {}, team = [], mode = "task") {
   const tid = newTid();
   const dir = taskDir(tid);
   ensureDir(join(dir, "sql"));
   ensureDir(join(dir, "data"));
   const now = new Date().toISOString();
-  const meta = { tid, goal, status: "执行中", createdAt: now, updatedAt: now, models, team, seq: 0 };
+  const meta = {
+    tid,
+    goal,
+    mode: mode === "discussion" ? "discussion" : "task",
+    status: "执行中",
+    createdAt: now,
+    updatedAt: now,
+    models,
+    team,
+    seq: 0,
+  };
   writeFileSync(join(dir, "meta.json"), JSON.stringify(meta, null, 2));
   writeFileSync(join(dir, "conversation.jsonl"), "");
   writeFileSync(join(dir, "decisions.jsonl"), "");
@@ -171,6 +182,75 @@ export function readThinking(tid) {
   } catch { return []; }
 }
 
+function usageNumbers(usage = {}) {
+  const promptTokens = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0) || 0;
+  const completionTokens = Number(usage.completion_tokens ?? usage.output_tokens ?? 0) || 0;
+  const totalTokens = Number(usage.total_tokens ?? (promptTokens + completionTokens)) || 0;
+  const cachedTokens = Number(
+    usage.prompt_tokens_details?.cached_tokens
+    ?? usage.input_tokens_details?.cached_tokens
+    ?? usage.cached_tokens
+    ?? 0
+  ) || 0;
+  const reasoningTokens = Number(
+    usage.completion_tokens_details?.reasoning_tokens
+    ?? usage.output_tokens_details?.reasoning_tokens
+    ?? usage.reasoning_tokens
+    ?? 0
+  ) || 0;
+  return { promptTokens, completionTokens, totalTokens, cachedTokens, reasoningTokens };
+}
+
+function addUsage(target, values, ms = 0) {
+  target.calls += 1;
+  target.promptTokens += values.promptTokens;
+  target.completionTokens += values.completionTokens;
+  target.totalTokens += values.totalTokens;
+  target.cachedTokens += values.cachedTokens;
+  target.reasoningTokens += values.reasoningTokens;
+  target.latencyMs += Number(ms) || 0;
+  if (values.totalTokens === 0) target.unmeteredCalls += 1;
+}
+
+function emptyUsageGroup(extra = {}) {
+  return {
+    ...extra,
+    calls: 0,
+    unmeteredCalls: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    cachedTokens: 0,
+    reasoningTokens: 0,
+    latencyMs: 0,
+  };
+}
+
+// 聚合单个任务的模型用量。兼容 Chat Completions 与 Responses 风格的 usage 字段。
+export function summarizeUsage(tid) {
+  const records = readThinking(tid);
+  const total = emptyUsageGroup();
+  const agentMap = new Map();
+  const modelMap = new Map();
+  let updatedAt = null;
+
+  for (const record of records) {
+    const actor = record.actor || "unknown";
+    const model = record.model || "unknown";
+    const values = usageNumbers(record.usage || {});
+    if (!agentMap.has(actor)) agentMap.set(actor, emptyUsageGroup({ actor }));
+    if (!modelMap.has(model)) modelMap.set(model, emptyUsageGroup({ model }));
+    addUsage(total, values, record.ms);
+    addUsage(agentMap.get(actor), values, record.ms);
+    addUsage(modelMap.get(model), values, record.ms);
+    if (record.ts && (!updatedAt || record.ts > updatedAt)) updatedAt = record.ts;
+  }
+
+  const byAgent = [...agentMap.values()].sort((a, b) => b.totalTokens - a.totalTokens);
+  const byModel = [...modelMap.values()].sort((a, b) => b.totalTokens - a.totalTokens);
+  return { total, byAgent, byModel, updatedAt };
+}
+
 export const AGENT_CONFIG_PATH = join(ROOT, "agent-config.json");
 
 export function getAgentConfig() {
@@ -218,6 +298,7 @@ export function getTaskBundle(tid) {
     decisions: readDecisions(tid),
     feedback: readFeedback(tid),
     thinking: readThinking(tid),
+    usage: summarizeUsage(tid),
     sql,
     data,
     state_md: readFileSafe("STATE.md"),

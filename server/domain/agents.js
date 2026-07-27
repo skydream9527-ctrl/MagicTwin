@@ -21,7 +21,7 @@ const MAX_FILE = 500 * 1024; // 单文件预览上限，超出截断
 // 支持任意 roster 中登记的 Agent，新增 Agent 自动可用。
 function modelOf(key) {
   try {
-    const saved = JSON.parse(readFileSync(join(ROOT, "workspace", "agent-config.json"), "utf8"));
+    const saved = JSON.parse(readFileSync(join(ROOT, "agent-config.json"), "utf8"));
     if (saved[key]) return saved[key];
   } catch {}
   return CONFIG.models[key] || "";

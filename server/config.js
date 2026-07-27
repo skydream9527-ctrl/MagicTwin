@@ -1,5 +1,6 @@
 // 集中配置。所有参数均可用环境变量覆盖（见 .env.example）。
 // 模型名格式取决于你的 LLM 网关：OpenAI 原生用 "gpt-4o"，支持 {owner}/{id} 的网关用 "openai/gpt-4o"。
+import "./env.js";
 import { ROSTER } from "./domain/roster.js";
 
 // 从 roster 派生「每个 Agent 的默认模型」：
@@ -9,9 +10,12 @@ import { ROSTER } from "./domain/roster.js";
 // 新增 Agent 无需改本文件，加 env 变量或 roster.defaultModel 即可。
 function buildDefaultModels() {
   const out = {};
+  const mockMode = (process.env.LLM_BACKEND || "mock").toLowerCase() === "mock";
   for (const a of ROSTER) {
     const envKey = `${a.key.toUpperCase().replace(/-/g, "_")}_MODEL`;
-    out[a.key] = process.env[envKey] || a.defaultModel || "gpt-4o";
+    out[a.key] = mockMode
+      ? "mock/magictwin"
+      : process.env[envKey] || a.defaultModel || "gpt-4o";
   }
   return out;
 }
@@ -20,6 +24,9 @@ const DEFAULT_MODELS = buildDefaultModels();
 
 export const CONFIG = {
   port: Number(process.env.PORT || 8787),
+  // 本地优先：默认绑定 localhost，与浏览器访问地址保持一致。
+  // 需要局域网访问时显式设 HOST=0.0.0.0。
+  host: process.env.HOST || "localhost",
 
   // 每个 Agent 的默认模型（从 roster 派生 + env 覆盖）。
   // 兼容旧字段名 twinModel / dataModel / styleModel。
@@ -40,6 +47,11 @@ export const CONFIG = {
 
   // 编排安全阀
   maxSteps: Number(process.env.MAX_STEPS || 28), // Twin+Data 总回合上限，防跑飞
+  parallel: {
+    // Twin 一次最多并行调度的 Agent 数量，以及每个并行子任务可自行推进的工具回合数。
+    maxAgents: Math.max(2, Number(process.env.MAX_PARALLEL_AGENTS || 6)),
+    maxRounds: Math.max(1, Number(process.env.MAX_PARALLEL_ROUNDS || 5)),
+  },
   // 单次 LLM 调用超时（毫秒）；默认 30 分钟。走 node:https 自控超时，可设任意大，不受内置 fetch ~300s 限制。
   // 需要调整就改这里或设环境变量 LLM_TIMEOUT_MS；超时/网络抖动仍会由编排层自动退避重试而非整体报错。
   llmTimeoutMs: Number(process.env.LLM_TIMEOUT_MS || 1800000),

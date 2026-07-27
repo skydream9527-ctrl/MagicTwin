@@ -117,20 +117,54 @@ function twinToAgentText(a) {
   if (a.type === "rework") return `【Twin 打回重做】${a.message || ""}\n请补齐后重新交付。`;
   return a.message || "";
 }
-function twinToStyleText(a, goal, lastReport) {
-  const rep = lastReport
-    ? `\n【待优化的分析结论】\n结论：${lastReport.summary || ""}\n发现：\n${(lastReport.findings || []).map((f) => `- ${f}`).join("\n")}`
+function twinToStyleText(a, goal, lastReport, reports = []) {
+  const sourceReports = reports.length ? reports : (lastReport ? [lastReport] : []);
+  const rep = sourceReports.length
+    ? `\n【待整合的多 Agent 观点】\n${sourceReports.map((report, index) => {
+      const agent = getRosterEntry(report.by);
+      return `${index + 1}. ${(agent && agent.name) || report.by || "Agent"}\n结论：${report.summary || ""}\n要点：\n${(report.findings || []).map((f) => `- ${f}`).join("\n")}`;
+    }).join("\n\n")}`
     : "";
-  return `【Twin 请你美化排版】\n用户目标：${goal}${rep}\nTwin 说明：${a.message || ""}\n请把它整理成结构清晰、可直接交付给用户的报告，只输出规定的 JSON。`;
+  return `【Twin 请你综合整理】\n用户议题：${goal}${rep}\nTwin 说明：${a.message || ""}\n请保留各方共识、分歧、反例与不确定性，整理成结构清晰、可直接交付给用户的讨论纪要，只输出规定的 JSON。`;
+}
+function normalizeSynthesis(input = {}, goal = "") {
+  const list = (value) => (Array.isArray(value) ? value : []).map((item) => String(item || "").trim()).filter(Boolean);
+  return {
+    title: String(input.title || goal || "多 Agent 综合结论").trim(),
+    summary: String(input.summary || "").trim(),
+    consensus: list(input.consensus),
+    differences: list(input.differences),
+    risks: list(input.risks),
+    uncertainties: list(input.uncertainties),
+    recommendations: list(input.recommendations),
+  };
+}
+function twinSynthesisToStyleText(synthesis, goal) {
+  const section = (heading, items) => `【${heading}】\n${items.length ? items.map((item) => `- ${item}`).join("\n") : "- （无）"}`;
+  return `【Twin 已完成总结果汇总 · Style 只负责排版】
+用户议题：${goal}
+标题：${synthesis.title}
+总结果：${synthesis.summary}
+
+${section("共识结论", synthesis.consensus)}
+${section("核心分歧", synthesis.differences)}
+${section("反例与风险", synthesis.risks)}
+${section("不确定性", synthesis.uncertainties)}
+${section("下一步建议", synthesis.recommendations)}
+
+你不得重新判断、增加新结论或删除分歧；只把 Twin 的上述总结果整理成 styled JSON。`;
 }
 function agentAskText(a, agent) {
   const questions = normQuestions(a.questions);
   const qs = questions.map((q) => `- [${q.id || "?"}] ${q.text || "(空)"}｜选项:${(q.options || []).join("/")}｜推荐:${q.recommendation || "-"}｜风险:${q.risk || "low"}`);
   return `【${agent.name}（key=${agent.key}）的确认项】${a.message || ""}\n${qs.join("\n")}\n（你回答时 target 用 "${agent.key}"）`;
 }
-function agentReportText(a, agent) {
+function agentReportText(a, agent, discussion = null) {
   const fs = (a.findings || []).map((f) => `- ${f}`).join("\n");
-  return `【${agent.name}（key=${agent.key}）${a.final ? "最终" : ""}报告】${a.message || ""}\n结论：${a.summary || ""}\n发现：\n${fs}\n\n请你以用户视角验收：有硬伤就打回（target="${agent.key}", type="rework"）；通过就交给样式优化 Agent 排版（target="style", type="beautify"）。`;
+  const next = discussion && discussion.remaining.length
+    ? `\n\n这是圆桌中的一个视角，不是最终答案。请把有价值的结论与疑点带给下一位专家继续讨论。尚待参与：${discussion.remaining.join("、")}。`
+    : "\n\n请你以用户视角验收：有硬伤就打回；材料齐全后再交给样式优化 Agent 综合整理。";
+  return `【${agent.name}（key=${agent.key}）${a.final ? "最终" : ""}报告】${a.message || ""}\n结论：${a.summary || ""}\n发现：\n${fs}${next}`;
 }
 function styledReportText(a) {
   const secs = (a.sections || []).map((s) => `【${s.heading || ""}】\n${(s.bullets || []).map((b) => `- ${b}`).join("\n")}`).join("\n");
@@ -159,15 +193,30 @@ function busyPhrase(key) {
   return `${(a && a.name) || key} 正在工作…`;
 }
 
-export async function runOrchestration({ tid, goal, models, team, resumeEvents, ssePush, takeInjections, waitForInjection, control }) {
+export async function runOrchestration({ tid, goal, mode = "task", models, team, resumeEvents, ssePush, takeInjections, waitForInjection, control }) {
   const modelFor = (key) => (models && models[key]) || defaultModelFor(key);
+  const selectedTeam = [...new Set((team || []).filter((key) => isToolAgentKey(key)))];
+  const selectedTeamSet = new Set(selectedTeam);
+  const discussionMode = mode === "discussion";
+  const discussionExperts = selectedTeam.filter((key) => !["style", "report-writer"].includes(key));
+  const requiredDiscussionCount = discussionMode ? Math.min(3, discussionExperts.length) : 0;
+  const isAllowedTool = (key) => isToolAgentKey(key) && (!selectedTeamSet.size || selectedTeamSet.has(key));
 
   const emit = (event) => {
     if (event.transient) { ssePush({ seq: -1, ts: new Date().toISOString(), ...event }); return event; }
     const full = appendEvent(tid, event); ssePush(full); return full;
   };
   const logThinking = (actor, model, r) => {
-    appendThinking(tid, { actor, model, reasoning: r.reasoning || "", raw: r.raw || "", attempts: r.attempts, ms: r.ms, usage: r.usage || {} });
+    appendThinking(tid, {
+      actor,
+      model,
+      kind: r.kind || "agent",
+      reasoning: r.reasoning || "",
+      raw: r.raw || "",
+      attempts: r.attempts,
+      ms: r.ms,
+      usage: r.usage || {},
+    });
   };
 
   const isResume = Array.isArray(resumeEvents) && resumeEvents.length > 0;
@@ -194,6 +243,18 @@ export async function runOrchestration({ tid, goal, models, team, resumeEvents, 
     const msgs = agentMsgs.get(key);
     if (!msgs) return;
     const res = await maybeCompact({ key, model: modelFor(key), messages: msgs, lastUsage: usageByAgent.get(key), emit, config: CONFIG, force });
+    if (res.usageRecord) {
+      appendThinking(tid, {
+        actor: key,
+        model: res.usageRecord.model || modelFor(key),
+        kind: "compact",
+        reasoning: res.usageRecord.reasoning || "",
+        raw: res.usageRecord.raw || "",
+        attempts: 1,
+        ms: res.usageRecord.ms,
+        usage: res.usageRecord.usage || {},
+      });
+    }
     if (res.compacted) agentMsgs.set(key, res.messages);
   };
   const callWithBudget = async (key) => {
@@ -211,6 +272,9 @@ export async function runOrchestration({ tid, goal, models, team, resumeEvents, 
   let turn = "twin";
   let steps = 0;
   let lastReport = null;
+  let twinSynthesis = null;
+  const discussionReports = [];
+  const consultedAgents = new Set();
 
   if (isResume) {
     const main = resumeEvents.filter((e) => e.channel !== "side");
@@ -219,8 +283,15 @@ export async function runOrchestration({ tid, goal, models, team, resumeEvents, 
     const doneQueries = main.filter((e) => e.kind === "tool_result").map((e) => e.ok
       ? `- ${e.name}（${sqlByName[e.name] || ""}）成功 ${e.rowCount} 行；列：${(e.columns || []).join(", ")}\n  结果样本：${JSON.stringify((e.records || []).slice(0, 40))}`
       : `- ${e.name} 失败：${e.error || ""}`).join("\n");
-    const reportEvt = [...main].reverse().find((e) => e.kind === "report");
+    const reportEvents = main.filter((e) => e.kind === "report" && isToolAgentKey(e.actor));
+    for (const event of reportEvents) {
+      discussionReports.push({ summary: event.summary || "", findings: event.findings || [], by: event.actor });
+      if (discussionExperts.includes(event.actor)) consultedAgents.add(event.actor);
+    }
+    const reportEvt = reportEvents[reportEvents.length - 1];
     if (reportEvt) lastReport = { summary: reportEvt.summary || "", findings: reportEvt.findings || [] };
+    const synthesisEvt = [...main].reverse().find((event) => event.actor === "twin" && event.kind === "synthesis");
+    if (synthesisEvt) twinSynthesis = normalizeSynthesis(synthesisEvt.synthesis || synthesisEvt, goal);
     const historyBrief = main.map((e) => {
       const ent = getRosterEntry(e.actor);
       const who = e.actor === "user" ? "用户" : e.actor === "system" ? "系统" : (ent && ent.name) || e.actor;
@@ -236,7 +307,7 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
     if (last.actor === "user" && last.kind === "inject") {
       turn = (last.to === "twin" || isToolAgentKey(last.to)) ? last.to : "twin";
     } else if (last.actor === "twin") {
-      if (["assign", "answer", "rework", "beautify"].includes(last.kind)) turn = isToolAgentKey(last.to) ? last.to : "data";
+      if (["assign", "answer", "rework", "beautify", "synthesis"].includes(last.kind)) turn = isToolAgentKey(last.to) ? last.to : "data";
       else if (["deliver", "escalate"].includes(last.kind)) turn = null;
       else turn = "twin";
     } else if (last.kind === "tool_call" || last.kind === "tool_result") {
@@ -251,7 +322,14 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
     emit({ actor: "system", kind: "notice", text: "检测到该任务此前被中断，正在从当前进度自动续跑…" });
   } else {
     emit({ actor: "user", kind: "goal", text: goal });
-    (await msgsFor("twin")).push({ role: "user", content: `【用户目标】${goal}` });
+    const teamNames = selectedTeam.map((key) => {
+      const agent = getRosterEntry(key);
+      return `${key}（${agent ? agent.name : key}，模型 ${modelFor(key)}）`;
+    }).join("、");
+    const discussionBrief = discussionMode
+      ? `\n\n【本次模式】多模型圆桌讨论\n【指定团队】${teamNames || "从可用团队中选择"}\n【主持要求】第一轮必须使用 type="assign_many"，同时邀请至少 ${requiredDiscussionCount || 3} 位不同专业 Agent 并行、独立发表；并行结果齐全后，你必须亲自输出 type="synthesize" 形成总结果（共识、分歧、风险、不确定性、建议），Style 只能排版 Twin 的总结；在 Twin 总结完成前禁止 beautify/deliver。`
+      : "";
+    (await msgsFor("twin")).push({ role: "user", content: `【用户${discussionMode ? "议题" : "目标"}】${goal}${discussionBrief}` });
   }
 
   const routeInjection = async (inj) => {
@@ -277,6 +355,7 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
         temperature: 0.3,
         timeoutMs: 8000,
       });
+      logThinking("twin", modelFor("twin"), { ...r, raw: r.content, attempts: 1, kind: "brief" });
       const summary = (r.content || "").trim() || fallbackBrief(decision);
       const cardType = decision.actionType === "beautify" ? "accept" : (decision.actionType || "info");
       ssePush({
@@ -301,6 +380,191 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
     }
   };
 
+  // Twin 的并行派发器：每个 Agent 保持独立上下文，并以真正并发的 LLM / 工具调用推进。
+  // 单个子任务可在自己的 worker 内连续 query / execute 多轮；报告、确认项和排版稿最后统一交回 Twin。
+  const runParallelAssignments = async (rawAssignments) => {
+    const seen = new Set();
+    const assignments = (Array.isArray(rawAssignments) ? rawAssignments : [])
+      .map((item) => ({
+        target: typeof item?.target === "string" ? item.target : "",
+        message: typeof item?.message === "string" ? item.message.trim() : "",
+      }))
+      .filter((item) => {
+        if (!item.target || !item.message || seen.has(item.target) || !isAllowedTool(item.target)) return false;
+        seen.add(item.target);
+        return true;
+      })
+      .slice(0, CONFIG.parallel.maxAgents);
+
+    if (assignments.length < 2) return { ok: false, reason: "assign_many 至少需要两个不同的可用工具 Agent。" };
+
+    const batchId = `P-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+    emit({
+      actor: "system",
+      kind: "parallel_start",
+      channel: "main",
+      batchId,
+      targets: assignments.map((item) => item.target),
+      text: `Twin 已并行启动 ${assignments.length} 个 Agent 子任务。`,
+    });
+
+    for (const item of assignments) {
+      emit({
+        actor: "twin",
+        kind: "assign",
+        channel: "main",
+        to: item.target,
+        text: item.message,
+        parallel: true,
+        batchId,
+      });
+      (await msgsFor(item.target)).push({
+        role: "user",
+        content: twinToAgentText({ type: "assign", message: item.message }),
+      });
+      emitBrief({ actionType: "assign", agent: item.target });
+    }
+
+    const runWorker = async ({ target: key }) => {
+      const agent = getRosterEntry(key);
+      const caps = (agent && agent.capabilities) || [];
+      let rounds = 0;
+
+      while (rounds < CONFIG.parallel.maxRounds && steps < CONFIG.maxSteps) {
+        while (control && control.isPaused() && !control.isAborted()) {
+          await new Promise((res) => setTimeout(res, 500));
+        }
+        if (control && control.isAborted()) return { key, status: "aborted" };
+
+        rounds += 1;
+        steps += 1;
+        emit({ actor: key, kind: "status", text: `${busyPhrase(key)}（并行 ${rounds}）`, transient: true });
+        const r = await callWithBudget(key);
+        logThinking(key, modelFor(key), r);
+        const action = r.json;
+        (await msgsFor(key)).push({ role: "assistant", content: r.raw });
+
+        if (!action) {
+          emit({ actor: "system", kind: "error", text: `${agent.name} 的并行输出无法解析，该子任务已停止。` });
+          return { key, status: "error", error: "输出无法解析" };
+        }
+
+        if (action.type === "query" && caps.includes("query")) {
+          const name = (action.name || `${batchId}_${key}_${rounds}`).replace(/[^\w.\-]/g, "_");
+          if (!action.sql || !action.sql.trim()) {
+            (await msgsFor(key)).push({
+              role: "user",
+              content: `【格式错误】type="query" 的 sql 不能为空。请重新输出完整、可执行的只读 SELECT JSON。`,
+            });
+            continue;
+          }
+          emit({ actor: key, kind: "tool_call", channel: "main", text: action.purpose || "执行查询", sql: action.sql, name, parallel: true, batchId });
+          const result = await runQuery(action.sql);
+          saveSql(tid, name, action.sql);
+          if (result.ok) saveData(tid, name, { sql: action.sql, columns: result.columns, records: result.records });
+          emit({
+            actor: "system", kind: "tool_result", channel: "main", name, ok: result.ok, ms: result.ms,
+            rowCount: result.rowCount, columns: result.columns, colTypes: result.colTypes,
+            records: result.ok ? result.records.slice(0, 200) : undefined,
+            error: result.error, code: result.code, by: key, parallel: true, batchId,
+          });
+          (await msgsFor(key)).push({ role: "user", content: toolResultText(name, result) });
+          continue;
+        }
+
+        if (action.type === "execute" && caps.includes("execute")) {
+          const name = (action.name || `${batchId}_${key}_${rounds}`).replace(/[^\w.\-]/g, "_");
+          emit({ actor: key, kind: "tool_call", channel: "main", text: action.purpose || "执行代码", code: action.code, name, lang: "python", parallel: true, batchId });
+          const result = await runPython(action.code || "");
+          emit({
+            actor: "system", kind: "tool_result", channel: "main", name, ok: result.ok, ms: result.ms,
+            stdout: result.ok ? (result.stdout || "").slice(0, 8000) : undefined,
+            stderr: (result.stderr || "").slice(0, 4000),
+            error: result.error, code: result.code, lang: "python", by: key, parallel: true, batchId,
+          });
+          (await msgsFor(key)).push({ role: "user", content: codeResultText(name, result) });
+          continue;
+        }
+
+        if (action.type === "ask") {
+          const questions = normQuestions(action.questions);
+          emit({ actor: key, kind: "ask", channel: "main", to: "twin", text: action.message || "", questions, parallel: true, batchId });
+          return { key, status: "waiting", action, agent };
+        }
+
+        if (action.type === "report") {
+          emit({
+            actor: key, kind: "report", channel: "main", to: "twin", text: action.message || "",
+            summary: action.summary || "", findings: action.findings || [], final: !!action.final,
+            artifacts: action.artifacts || [], parallel: true, batchId,
+          });
+          return {
+            key,
+            status: "report",
+            action,
+            agent,
+            report: { summary: action.summary || "", findings: action.findings || [], by: key },
+          };
+        }
+
+        if (action.type === "styled") {
+          emit({
+            actor: key, kind: "styled", channel: "main", to: "twin", title: action.title || "",
+            summary: action.summary || "", highlights: action.highlights || [], sections: action.sections || [],
+            text: action.message || "", parallel: true, batchId,
+          });
+          return { key, status: "styled", action, agent };
+        }
+
+        (await msgsFor(key)).push({
+          role: "user",
+          content: "并行子任务中请从 ask/query/execute/report/styled 选择符合你能力的 type，并只输出一个 JSON 对象。",
+        });
+      }
+
+      emit({ actor: "system", kind: "notice", channel: "main", text: `${agent.name} 的并行子任务已达到回合上限。` });
+      return { key, status: "limit" };
+    };
+
+    const results = await Promise.all(assignments.map(runWorker));
+    const reports = results.filter((result) => result.status === "report");
+    for (const result of reports) {
+      lastReport = result.report;
+      discussionReports.push(result.report);
+      if (discussionExperts.includes(result.key)) consultedAgents.add(result.key);
+    }
+
+    const twinMessages = await msgsFor("twin");
+    for (const result of results) {
+      if (result.status === "report") {
+        const remaining = discussionExperts.filter((key) => !consultedAgents.has(key));
+        twinMessages.push({
+          role: "user",
+          content: agentReportText(result.action, result.agent, discussionMode ? { remaining } : null),
+        });
+      } else if (result.status === "waiting") {
+        twinMessages.push({ role: "user", content: agentAskText(result.action, result.agent) });
+      } else if (result.status === "styled") {
+        twinMessages.push({ role: "user", content: styledReportText(result.action) });
+      }
+    }
+
+    const resultSummary = results.map((result) => `${result.key}:${result.status}`).join("、");
+    twinMessages.push({
+      role: "user",
+      content: `【并行批次已完成】batch=${batchId}\n${resultSummary}\n请同时审视所有返回结果：必要时再次并行复核；材料齐全后再综合或排版。`,
+    });
+    emit({
+      actor: "system",
+      kind: "parallel_done",
+      channel: "main",
+      batchId,
+      targets: assignments.map((item) => item.target),
+      text: `并行批次完成：${results.filter((result) => ["report", "styled"].includes(result.status)).length}/${assignments.length} 个子任务已交回成果。`,
+    });
+    return { ok: true, batchId, results };
+  };
+
   const doReflectAndCalibrate = async () => {
     try {
       const calResult = await calibrate("u_local", tid, (event, data) => {
@@ -318,14 +582,15 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
       const events = readEvents(tid);
       const decisionsText = summarizeDecisions(decisions);
       const conversationSummary = summarizeConversation(events);
-      const msgs = buildReflectMessages({ goal, decisionsText, conversationSummary, deliverablesSummary: "分析报告" });
+      const msgs = buildReflectMessages({ goal, decisionsText, conversationSummary, deliverablesSummary: discussionMode ? "多模型讨论纪要" : "任务交付物" });
       const r = await chat({
         model: modelFor("twin"),
-        messages: [{ role: "system", content: "提取数据分析经验。只输出 JSON。" }, ...msgs],
+        messages: [{ role: "system", content: "提取多 Agent 协作中的可复用经验。只输出 JSON。" }, ...msgs],
         maxTokens: 600,
         temperature: 0.2,
         timeoutMs: 15000,
       });
+      logThinking("twin", modelFor("twin"), { ...r, raw: r.content, attempts: 1, kind: "reflect" });
       const parsed = parseReflectOutput(r.content);
       if (parsed && parsed.confidence > 0.3 && parsed.scene) {
         const candidatePath = createCandidate("u_local", { ...parsed, tid });
@@ -374,7 +639,16 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
         (await msgsFor("twin")).push({ role: "assistant", content: r.raw });
         if (!a) { emit({ actor: "system", kind: "error", text: "Twin 输出无法解析，已停止。" }); updateMeta(tid, { status: "报错" }); turn = null; continue; }
 
-        if (["assign", "answer", "rework"].includes(a.type) && isToolAgentKey(a.target)) {
+        if (a.type === "assign_many") {
+          const result = await runParallelAssignments(a.assignments);
+          if (!result.ok) {
+            (await msgsFor("twin")).push({
+              role: "user",
+              content: `【并行派发格式错误】${result.reason} 请修正 assignments 后重新输出 type="assign_many"，或改用单个 assign。`,
+            });
+          }
+          turn = "twin";
+        } else if (["assign", "answer", "rework"].includes(a.type) && isAllowedTool(a.target)) {
           if (a.type === "answer") {
             const trust = getTrust("u_local");
             if (!shouldAutoAnswer("caliber_selection", trust)) {
@@ -402,19 +676,97 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
           emitBrief({ actionType: a.type, question: (a.answers || [{}])[0]?.id, answer: (a.answers || [{}])[0]?.answer, reason: (a.answers || [{}])[0]?.reason, agent: tgt });
           turn = tgt;
           }
+        } else if (a.type === "synthesize") {
+          if (discussionMode && consultedAgents.size < requiredDiscussionCount) {
+            const remaining = discussionExperts.filter((key) => !consultedAgents.has(key));
+            (await msgsFor("twin")).push({
+              role: "user",
+              content: `【圆桌流程未完成】目前只有 ${consultedAgents.size}/${requiredDiscussionCount} 位专家完成观点。请先继续 assign_many 给尚未完成的专家：${remaining.join("、")}，结果齐全后再 synthesize。`,
+            });
+            turn = "twin";
+            continue;
+          }
+          const synthesis = normalizeSynthesis(a.synthesis || a, goal);
+          if (!synthesis.summary || !synthesis.consensus.length) {
+            (await msgsFor("twin")).push({
+              role: "user",
+              content: "【总结果不完整】synthesize 必须包含非空的 synthesis.summary 与 synthesis.consensus；同时请明确 differences、risks、uncertainties、recommendations。请基于所有 Agent 报告重新汇总。",
+            });
+            turn = "twin";
+            continue;
+          }
+          twinSynthesis = synthesis;
+          const target = isAllowedTool("style") ? "style" : (isToolAgentKey(a.target) ? a.target : "style");
+          emit({
+            actor: "twin",
+            kind: "synthesis",
+            channel: "main",
+            to: target,
+            text: synthesis.summary,
+            synthesis,
+            title: synthesis.title,
+            consensus: synthesis.consensus,
+            differences: synthesis.differences,
+            risks: synthesis.risks,
+            uncertainties: synthesis.uncertainties,
+            recommendations: synthesis.recommendations,
+            thought: a.thought || undefined,
+          });
+          (await msgsFor(target)).push({ role: "user", content: twinSynthesisToStyleText(synthesis, goal) });
+          emitBrief({ actionType: "accept", agent: "twin", deliverable: "Twin 总结果" });
+          turn = target;
         } else if (a.type === "beautify") {
+          if (discussionMode && consultedAgents.size < requiredDiscussionCount) {
+            const remaining = discussionExperts.filter((key) => !consultedAgents.has(key));
+            (await msgsFor("twin")).push({
+              role: "user",
+              content: `【圆桌流程未完成】目前只有 ${consultedAgents.size}/${requiredDiscussionCount} 位专家完成观点。请继续 assign 给尚未参与的专家：${remaining.join("、")}。不得提前排版或交付。`,
+            });
+            turn = "twin";
+            continue;
+          }
+          if (discussionMode && !twinSynthesis) {
+            (await msgsFor("twin")).push({
+              role: "user",
+              content: "【缺少 Twin 总结】不要把原始 Agent 报告直接交给 Style。请先输出 type=\"synthesize\"，由你亲自形成总结果，再让 Style 只负责排版。",
+            });
+            turn = "twin";
+            continue;
+          }
           const tgt = isToolAgentKey(a.target) ? a.target : "style";
           emit({ actor: "twin", kind: "beautify", channel: "main", to: tgt, text: a.message || "把这份结论整理成可交付用户的报告", thought: a.thought || undefined });
-          (await msgsFor(tgt)).push({ role: "user", content: tgt === "style" ? twinToStyleText(a, goal, lastReport) : twinToAgentText({ ...a, type: "assign" }) });
+          (await msgsFor(tgt)).push({ role: "user", content: tgt === "style" ? twinToStyleText(a, goal, lastReport, discussionReports) : twinToAgentText({ ...a, type: "assign" }) });
           emitBrief({ actionType: "accept", agent: tgt, deliverable: "排版报告" });
           turn = tgt;
         } else if (a.type === "deliver") {
-          emit({ actor: "twin", kind: "deliver", channel: "main", to: "user", text: a.message || "", decisions: a.decisions || [], next_steps: a.next_steps || [], thought: a.thought || undefined });
+          if (discussionMode && consultedAgents.size < requiredDiscussionCount) {
+            const remaining = discussionExperts.filter((key) => !consultedAgents.has(key));
+            (await msgsFor("twin")).push({
+              role: "user",
+              content: `【圆桌流程未完成】还不能交付。请先邀请 ${remaining.join("、")} 完成独立观点与交叉审视。`,
+            });
+            turn = "twin";
+            continue;
+          }
+          if (discussionMode && !twinSynthesis) {
+            (await msgsFor("twin")).push({
+              role: "user",
+              content: "【禁止直接交付】请先输出 type=\"synthesize\" 汇总全部 Agent 结果；系统会将 Twin 总结交给 Style 排版，排版返回后你再 deliver。",
+            });
+            turn = "twin";
+            continue;
+          }
+          emit({
+            actor: "twin", kind: "deliver", channel: "main", to: "user", text: a.message || "",
+            decisions: a.decisions || [], next_steps: a.next_steps || [],
+            synthesis: twinSynthesis || undefined,
+            thought: a.thought || undefined,
+          });
           if (Array.isArray(a.decisions)) for (const d of a.decisions) appendDecision(tid, d);
           updateMeta(tid, { status: "已交付" });
           writeState(tid, getMeta(tid), readDecisions(tid));
           emitBrief({ actionType: "deliver", deliverable: a.title || "分析报告", question_count: (readDecisions(tid) || []).length });
-          doReflectAndCalibrate();
+          if (process.env.POST_DELIVERY_LEARNING_ENABLED !== "0") doReflectAndCalibrate();
           turn = null;
         } else if (a.type === "escalate") {
           emit({ actor: "twin", kind: "escalate", channel: "main", to: "user", text: a.message || "", options: a.options || [] });
@@ -422,7 +774,7 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
           emitBrief({ actionType: "escalate", question: a.message || "" });
           turn = null;
         } else {
-          (await msgsFor("twin")).push({ role: "user", content: "请从 assign/answer/rework/beautify/deliver/escalate 中选择一个合法 type，且 assign/answer/rework 的 target 必须是团队清单里存在的工具 Agent key。请重新输出。" });
+          (await msgsFor("twin")).push({ role: "user", content: "请从 assign/assign_many/answer/rework/synthesize/beautify/deliver/escalate 中选择一个合法 type。assign_many 的 assignments 至少包含两个不同且可用的工具 Agent；讨论模式收齐观点后必须先 synthesize，再由 Style 排版，最后 deliver。请重新输出。" });
         }
       } else if (isToolAgentKey(turn)) {
         const agent = getRosterEntry(turn);
@@ -472,8 +824,14 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
           turn = "twin";
         } else if (a.type === "report") {
           lastReport = { summary: a.summary || "", findings: a.findings || [], by: turn };
+          discussionReports.push(lastReport);
+          if (discussionExperts.includes(turn)) consultedAgents.add(turn);
           emit({ actor: turn, kind: "report", channel: "main", to: "twin", text: a.message || "", summary: a.summary || "", findings: a.findings || [], final: !!a.final, artifacts: a.artifacts || [] });
-          (await msgsFor("twin")).push({ role: "user", content: agentReportText(a, agent) });
+          const remaining = discussionExperts.filter((key) => !consultedAgents.has(key));
+          (await msgsFor("twin")).push({
+            role: "user",
+            content: agentReportText(a, agent, discussionMode ? { remaining } : null),
+          });
           turn = "twin";
         } else if (a.type === "styled") {
           emit({ actor: turn, kind: "styled", channel: "main", to: "twin", title: a.title || "", summary: a.summary || "", highlights: a.highlights || [], sections: a.sections || [], text: a.message || "" });
@@ -508,7 +866,7 @@ export async function runTwinInquiry({ tid, models, question, ssePush }) {
   }).join("\n");
   const decLines = decisions.length ? decisions.map((d) => `- ${d.question || d.summary || ""} → ${d.answer || ""}`).join("\n") : "（暂无）";
 
-  const sys = `你是用户的数字分身「Twin」。用户在工作区的"与 Twin 私聊"侧边栏里，随时问你关于当前这个数据分析任务的**进度 / 过程 / 你替他做了什么决定**之类的问题。请以简洁、亲切、结论优先的中文口语回答，像分身向本人快速汇报。不要输出 JSON，不要 markdown 代码块，控制在 2~5 句话。`;
+  const sys = `你是用户的数字分身「Twin」。用户在工作区的"与 Twin 私聊"侧边栏里，随时问你关于当前协作议题或任务的**进度 / 过程 / 各 Agent 的观点 / 你替他做了什么决定**。请以简洁、亲切、结论优先的中文口语回答，像圆桌主持人向本人快速汇报。不要输出 JSON，不要 markdown 代码块，控制在 2~5 句话。`;
   const ctx = `【任务目标】${meta?.goal || ""}
 【当前状态】${meta?.status || ""}
 【我替用户做的决定】
@@ -523,6 +881,16 @@ ${recent || "（刚开始，还没有动态）"}
   let answer = "";
   try {
     const r = await chat({ model: twinModel, messages: [{ role: "system", content: sys }, { role: "user", content: ctx }], maxTokens: 1200, temperature: 0.4 });
+    appendThinking(tid, {
+      actor: "twin",
+      model: twinModel,
+      kind: "inquiry",
+      reasoning: r.reasoning || "",
+      raw: r.content || "",
+      attempts: 1,
+      ms: r.ms,
+      usage: r.usage || {},
+    });
     answer = (r.content || "").trim();
   } catch (err) {
     answer = `（我这边查询进度时出了点岔子：${String(err.message).slice(0, 120)}）`;

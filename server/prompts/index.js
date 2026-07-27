@@ -5,7 +5,7 @@ import { search } from "../domain/experience.js";
 import { buildTwinSystem } from "./twin.js";
 import { buildDataAgentSystem } from "./data-agent.js";
 import { buildStyleAgentSystem } from "./style-agent.js";
-import { buildGenericAgentSystem } from "./generic.js";
+import { buildToolSystem } from "./generic.js";
 
 export async function buildSystemFor(key, uid = "u_local", taskContext = {}) {
   try {
@@ -31,7 +31,7 @@ function buildSystemFallback(key, uid, taskContext = {}) {
   if (key === "twin") return buildTwinSystem() + exp;
   if (key === "data") return buildDataAgentSystem() + exp;
   if (key === "style") return buildStyleAgentSystem();
-  return buildGenericAgentSystem(key) + exp;
+  return buildToolSystem(key) + exp;
 }
 
 function experienceBlockFallback(goal) {
@@ -81,7 +81,7 @@ export function cardTypeFor(actionType) {
 export function buildReflectMessages({ goal, decisionsText, conversationSummary, deliverablesSummary }) {
   return [{
     role: "user",
-    content: `请从这次数据分析任务中提取可复用的经验。
+    content: `请从这次多 Agent 协作任务中提取可复用的经验。
 
 任务目标：${goal}
 决策记录：
@@ -94,7 +94,7 @@ ${conversationSummary}
 
 请输出严格 JSON 格式：
 {
-  "scene": "场景描述（一句话，如：信息流消费时长波动归因）",
+  "scene": "场景描述（一句话，如：AI Agent 概念圆桌或消费时长波动归因）",
   "confidence": 0.0-1.0 的置信度,
   "key_decisions": "关键决策点总结",
   "tags": ["标签1", "标签2"],

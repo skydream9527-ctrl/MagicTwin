@@ -1,6 +1,6 @@
 # MagicTwin · 数字分身驱动的多 Agent 协作工作空间
 
-> **Twin（数字分身）代替你，去驱动真实的数据分析 Agent 与样式优化 Agent 把活干完**——真连 LLM 与数据平台查真实数据、真跑分析；Twin 替你回答过程中的确认项、验收产出、必要时打回重做，最后把结论交付给你。全程可旁观、可回溯、可随时接管。
+> **把一个热点、AI 话题或复杂任务交给多个 Agent、多个模型共同讨论。** Twin（数字分身）并行主持趋势研究、概念拆解与批判审视，亲自汇总共识、分歧、风险和不确定性，再交给 Style 只做排版。全程可旁观、可回溯、可随时插话或接管。
 >
 > *A digital-twin-driven multi-agent workspace: your Twin orchestrates a real data-analysis agent and a style-polish agent on your behalf — answering confirmation gates, reviewing deliverables, escalating only the high-risk calls back to you. Watch, replay, or jump in anytime.*
 
@@ -21,8 +21,11 @@
 |---|---|---|---|---|
 | **用户（你）** | — | 目标设定者 & 最终验收人 | 给目标、随时审阅、拍板被升级上来的高风险决策；可随时 @ 插话或私聊 Twin | 不盯每一步 |
 | **Twin（数字分身）** | `twin`（特权） | 用户的代理人 / 唯一编排者 | 理解意图、派活、**替用户回答确认项**、验收、打回、交付 | 只提议不越权；高风险回来问用户；不写 SQL、不查数、不排版 |
+| **趋势研究 Agent** | `tool` | 热点与生态观察者 | 区分稳定趋势、合理推断与待实时核实信号 | 无实时检索证据时不编造新闻、数字或来源 |
+| **概念拆解 Agent** | `tool` | 概念分析师 | 定义、机制、边界、相邻概念、例子与反例 | 不把流行说法冒充唯一共识 |
+| **批判审视 Agent** | `tool` | 反方审稿人 | 挑战假设、证据、反例、失败条件与二阶影响 | 针对论点而非立场，不为反对而反对 |
 | **数据分析 Agent** | `tool` | 干活的数据专家 | 命题澄清 → NL→SQL → **真实查数** → 分析 → 归因 → 出结论 | 甲方是 Twin 而非用户本人；不替用户拍板；只读查询 |
-| **样式优化 Agent** | `tool` | 报告编辑 | 把数据 Agent 的结论排版成可直接交付的报告 | 不查数、不改数字；只交回 Twin |
+| **样式优化 Agent** | `tool` | 综合编辑 | 把多个 Agent 的共识、分歧与不确定性整理成可交付纪要 | 不查数、不编造事实、不抹平分歧；只交回 Twin |
 | **通用 Agent** | `tool` | 入口编排者 | 判断意图、路由到合适的子 Agent，简单问题自己处理 | 数据类结论必须基于子 Agent 真实结果 |
 | **代码执行 Agent** | `tool` | Python 沙箱 | 跑 pandas/sklearn/prophet 做 STL、变点检测、预测、出图 | 只在沙箱执行；不替用户做决策 |
 | **报告撰写 Agent** | `tool` | 报告生成 | 基于数据产出周报 / 总结 / 项目复盘 | 不查数、不改结论 |
@@ -186,9 +189,8 @@ Twin 能指挥这些「来源各异」的 Agent，靠的是运行时统一注入
 git clone https://github.com/skydream9527-ctrl/MagicTwin.git
 cd MagicTwin
 
-# 复制环境变量示例，填入你的 LLM key
+# 复制环境变量示例（默认使用离线 Mock，无需 API key）
 cp .env.example .env
-# 编辑 .env，至少设置 LLM_API_KEY=sk-...
 
 # 复制 Twin 用户画像示例（profile.md 已在 .gitignore，绝不提交）
 cp workspace/users/u_local/twin/profile.example.md \
@@ -203,15 +205,25 @@ npm start
 # 或：node server/index.js
 ```
 
+服务端会自动读取项目根目录的 `.env`，且不会覆盖启动进程中已经设置的环境变量。
+默认配置使用：
+
+```bash
+LLM_BACKEND=mock
+```
+
+Mock 模式完全离线、不需要 API key，可跑通数据任务链路与多模型圆桌链路。
+要接入真实模型时，再把它改为 `openai` 并配置 `LLM_API_KEY`。
+
 > 启动后若提示 `[twin] 未找到 profile.md，已回退到 profile.example.md`，说明你还没创建自己的画像，Twin 会用示例画像代答——仍可运行，但代答质量取决于画像准确度。
 
-访问 http://localhost:8787 ，在启动屏输入一个数据分析目标（例如「看看最近一周消费时长有没有异常，帮我定位下」），为 Twin、数据 Agent 和样式 Agent 各选一个模型，点「交给 Twin」即可旁观整个协作过程。过程中你随时可以在底部 @ 某个 Agent 插话，或点右上「💬 问 Twin」私聊分身问进度。
+访问 http://localhost:8787 ，输入一个热点、AI 话题或概念（例如「多 Agent 系统什么时候优于单 Agent？」），点击「发起圆桌」即可旁观 Twin 同时派发趋势研究、概念拆解与批判审视，待多个独立结果返回后再统一综合。每个 Agent 都可配置不同模型；讨论中可随时 @ 某个 Agent 插话，或在不会遮挡主流程的侧栏私聊 Twin 问进度。
 
 ---
 
 ## 配置 LLM key
 
-服务端按以下顺序查找 key（需匹配 `sk-...` 格式，见 [`server/integrations/llm.js`](./server/integrations/llm.js)）：
+`LLM_BACKEND=openai` 时，服务端按以下顺序查找 key（兼容 `sk-...`、UUID 等无空白 Bearer Token，见 [`server/integrations/llm.js`](./server/integrations/llm.js)）：
 
 1. 环境变量 `LLM_API_KEY`
 2. `~/.config/magictwin/credentials`（形如 `export LLM_API_KEY=sk-...`）
@@ -229,6 +241,8 @@ LLM_API_KEY=sk-...
 ```
 
 model 参数格式取决于你的网关：OpenAI 原生用 `gpt-4o`，支持 `{owner}/{id}` 的网关用 `openai/gpt-4o`。详见 [`server/integrations/llm.js`](./server/integrations/llm.js)。
+
+如果兼容网关没有提供 `GET /models`，可用英文逗号设置 `LLM_MODELS`，前端模型选择器会直接使用这份白名单。
 
 ### 配置数据查询（可选）
 
@@ -260,17 +274,23 @@ QUERY_COMMAND="python3 my-query-tool.py {sql}"
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `PORT` | `8787` | HTTP 服务端口 |
-| `TWIN_MODEL` | `gpt-4o` | Twin 使用的模型 |
-| `DATA_MODEL` | `gpt-4o` | 数据 Agent 使用的模型 |
-| `STYLE_MODEL` | `gpt-4o` | 样式优化 Agent 使用的模型 |
+| `HOST` | `localhost` | HTTP 监听地址；仅在明确需要局域网访问时设为 `0.0.0.0` |
+| `LLM_BACKEND` | `mock` | `mock` 使用完全离线的确定性演示；`openai` 调真实兼容网关 |
+| `TWIN_MODEL` | Mock 下为 `mock/magictwin` | Twin 使用的模型 |
+| `DATA_MODEL` | Mock 下为 `mock/magictwin` | 数据 Agent 使用的模型 |
+| `STYLE_MODEL` | Mock 下为 `mock/magictwin` | 样式优化 Agent 使用的模型 |
 | `MAX_TOKENS` | `4000` | 单次生成 token 上限 |
 | `MAX_STEPS` | `28` | Twin+Data+Style 单个用户回合内的往返上限（每次用户插话重置） |
+| `MAX_PARALLEL_AGENTS` | `6` | Twin 单个并行批次最多同时调度的 Agent 数 |
+| `MAX_PARALLEL_ROUNDS` | `5` | 每个并行子任务在自己的 worker 内最多连续推进的工具 / 模型回合数 |
 | `LLM_API_KEY` | — | LLM key（最高优先级） |
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容端点 |
 | `LLM_TIMEOUT_MS` | `1800000` | LLM 单次调用超时（毫秒） |
 | `QUERY_BACKEND` | `sample` | 数据查询后端（`sample` / `command`） |
 | `QUERY_COMMAND` | — | 命令行适配器的查询命令（`QUERY_BACKEND=command` 时必填） |
 | `QUERY_ROW_LIMIT` | `2000` | 单条查询返回行上限 |
+| `POST_DELIVERY_LEARNING_ENABLED` | `1` | 交付后执行信任校准与经验候选提取；设 `0` 关闭 |
+| `MIRROR_AGENT_MEMORY` | `1` | 将任务对话镜像到 Agent 长期记忆；设 `0` 关闭 |
 
 模型选型实测参考见 [`server/config.js`](./server/config.js) 顶部注释。
 
@@ -300,7 +320,7 @@ QUERY_COMMAND="python3 my-query-tool.py {sql}"
 
 见 [`server/engine/orchestrator.js`](./server/engine/orchestrator.js)。多个 Agent 交替发言，每次只输出一个 JSON 对象；`turn` 表示下一个发言者，`null` 表示空闲等待用户：
 
-- **turn = twin**：`assign`（派活给任一工具 Agent）/ `answer`（代答确认项）/ `rework`（打回重做）/ `beautify`（转排版）/ `deliver`（交付，转空闲）/ `escalate`（升级问用户，转空闲）/ `delegate`（指派通用 Agent 进一步分解路由）/ `request-execute`（请求代码沙箱执行）→ 交给对应工具 Agent。
+- **turn = twin**：`assign`（单 Agent 派活）/ `assign_many`（多个独立 worker 并行派活）/ `answer`（代答确认项）/ `rework`（打回重做）/ `synthesize`（Twin 汇总全部观点，形成总结果）/ `beautify`（执行型任务转排版）/ `deliver`（交付，转空闲）/ `escalate`（升级问用户，转空闲）。圆桌模式强制先 `synthesize`，Style 只能排版 Twin 的总结。
 - **turn = <tool>（任一工具 Agent）**：
   - 有 `query` capability：`query`（提交真实 SQL，结果回喂后继续）/ `ask`（抛确认项给 Twin）/ `report`（把结论交回 Twin 验收）
   - 有 `execute` capability：`execute`（提交代码到沙箱，结果回喂后继续）/ `ask` / `report`
@@ -309,7 +329,7 @@ QUERY_COMMAND="python3 my-query-tool.py {sql}"
 
 用户插话路由：用户可 @ 任意花名册登记的 Agent（twin 或任一 tool）；所有工具 Agent 只能交回 Twin（星型拓扑）。侧栏 `/inquiry` 与主编排解耦，Twin 只读当前进度用自然语言口语作答。
 
-安全阀：单个用户回合内 Agent↔Agent 往返受 `MAX_STEPS` 限制（每次用户插话重置）；LLM 输出做容错 JSON 解析 + 多次「只输出 JSON」重试（加大 token、逐步降温）；调用异常做退避重试，彻底失败时优雅挂起而非整体崩溃。
+安全阀：单个用户回合内 Agent↔Agent 往返受 `MAX_STEPS` 限制（每次用户插话重置）；`assign_many` 通过独立 worker 并发执行，各 Agent 保留自己的上下文，批次大小和单 worker 回合数分别受 `MAX_PARALLEL_AGENTS` / `MAX_PARALLEL_ROUNDS` 限制；LLM 输出做容错 JSON 解析 + 多次「只输出 JSON」重试（加大 token、逐步降温）；调用异常做退避重试，彻底失败时优雅挂起而非整体崩溃。
 
 ---
 
@@ -648,7 +668,7 @@ buildContext({ agentKey, uid, tid, team, goal }) →
 > 上下文隔离、经验包、记忆晋升、团队空间等核心 2.0 能力见上方 [2.0 路线图](#20-路线图--上下文隔离与引用)。以下为其他规划项：
 
 - **扩展 Agent 能力深化**：通用 Agent 智能路由上线 / `report-writer` 周报模板 / `data-monitor` 异常告警接入通知系统
-- **从「星型汇报」到「多 Agent 对话」**：在 Twin 主持下开放受控的「有界群聊」——允许两个 Agent 就某个子问题直接对话几轮，Twin 旁听、随时叫停、最终裁决
+- **从 Twin 并行中继到 Agent 直接对话**：当前已支持 Twin 同时向多个 Agent 派发独立子任务、并行回收结果和统一裁决；下一步允许两个 Agent 就子问题直接对话几轮，Twin 旁听、叫停并裁决
 - **数据源适配器抽象**：DuckDB / SQLite / 自定义
 - **Mac 端本机分身**：从网页 Demo 进化为本机常驻的数字分身
 

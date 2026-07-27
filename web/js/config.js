@@ -2,18 +2,23 @@
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
-const AGENTS = [
-  { key: "twin", icon: "◆", name: "Twin · 数字分身", tagline: "唯一编排者：代表你派活 / 代答 / 验收 / 交付" },
-  { key: "data", icon: "📊", name: "数据分析 Agent", tagline: "NL→SQL 真实取数 + 分析归因" },
-  { key: "style", icon: "✨", name: "样式优化 Agent", tagline: "把结论排版成可直接交付的报告" },
+const FALLBACK_AGENTS = [
+  { key: "twin", icon: "◆", color: "twin", name: "Twin · 数字分身", tagline: "唯一编排者：代表你派活 / 代答 / 验收 / 交付" },
+  { key: "data", icon: "📊", color: "data", name: "数据分析 Agent", tagline: "NL→SQL 真实取数 + 分析归因" },
+  { key: "style", icon: "✨", color: "style", name: "样式优化 Agent", tagline: "把结论排版成可直接交付的报告" },
 ];
 
-let rec = [], all = [], cur = {};
+let rec = [], all = [], cur = {}, agents = FALLBACK_AGENTS;
 
 async function init() {
   try {
     const h = await (await fetch("/api/health")).json();
-    const m = $("#healthLLM"); m.textContent = h.hasKey ? "LLM 已连接" : "LLM 未配置"; m.className = "chip " + (h.hasKey ? "ok" : "bad");
+    const isMock = h.llm?.backend === "mock";
+    const m = $("#healthLLM"); m.textContent = isMock ? "LLM Mock" : h.hasKey ? "LLM 已连接" : "LLM 未配置"; m.className = "chip " + (h.hasKey ? "ok" : "bad");
+  } catch {}
+  try {
+    const d = await (await fetch("/api/agents")).json();
+    if (Array.isArray(d.agents) && d.agents.length) agents = d.agents;
   } catch {}
   try { const d = await (await fetch("/api/models")).json(); rec = d.recommended || []; all = d.all || []; } catch {}
   try { cur = await (await fetch("/api/agent-config")).json(); } catch { cur = {}; }
@@ -23,10 +28,10 @@ async function init() {
 
 function render() {
   const box = $("#cfgList");
-  box.innerHTML = AGENTS.map((a) => `
+  box.innerHTML = agents.map((a) => `
     <div class="cfg-card">
       <div class="cfg-agent">
-        <div class="avatar ${a.key}">${a.icon}</div>
+        <div class="avatar av-${esc(a.color || a.key)}">${esc(a.icon)}</div>
         <div class="cfg-agent-meta">
           <div class="cfg-name">${esc(a.name)}</div>
           <div class="cfg-tag">${esc(a.tagline)}</div>
@@ -34,7 +39,7 @@ function render() {
       </div>
       <label class="cfg-field"><span class="cfg-flabel">模型</span><select id="sel-${a.key}"></select></label>
     </div>`).join("");
-  AGENTS.forEach((a) => fillSelect($("#sel-" + a.key), cur[a.key]));
+  agents.forEach((a) => fillSelect($("#sel-" + a.key), cur[a.key]));
 }
 
 function fillSelect(sel, val) {
@@ -50,7 +55,7 @@ function fillSelect(sel, val) {
 }
 
 async function save() {
-  const body = { twin: $("#sel-twin").value, data: $("#sel-data").value, style: $("#sel-style").value };
+  const body = Object.fromEntries(agents.map((a) => [a.key, $("#sel-" + a.key)?.value || cur[a.key] || ""]).filter(([, model]) => model));
   const msg = $("#saveMsg");
   $("#saveBtn").disabled = true; msg.className = "save-msg"; msg.textContent = "保存中…";
   try {

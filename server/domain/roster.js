@@ -93,6 +93,75 @@ const BASE_ROSTER = [
   // ---- 扩展 Agent（可按需接入编排） ----
 
   {
+    key: "researcher",
+    kind: "tool",
+    capabilities: [],
+    name: "趋势研究 Agent",
+    icon: "◉",
+    color: "researcher",
+    tagline: "扫描热点、生态与关键参与者",
+    space: "workspace/agents/trend-researcher",
+    defaultModel: "doubao-seed-2.1-turbo",
+    role: "议题圆桌的趋势研究员：梳理市场热点、技术演进、关键参与者与值得验证的信号。",
+    responsibilities: [
+      "建立议题的市场与技术背景",
+      "区分长期趋势、短期热点与营销噪音",
+      "列出关键参与者、驱动因素和观察信号",
+      "明确实时信息、数据与来源方面的不确定性",
+    ],
+    boundary: "没有实时检索工具时不得伪造最新新闻、数字或来源；必须标注待核实事实与知识时效边界。",
+    files: [
+      { path: "workspace/agents/trend-researcher/agent.md", title: "趋势研究 Agent 操作手册", group: "人设 Prompt", desc: "热点扫描、证据分级与趋势判断协议" },
+    ],
+  },
+
+  {
+    key: "concept",
+    kind: "tool",
+    capabilities: [],
+    name: "概念拆解 Agent",
+    icon: "◇",
+    color: "concept",
+    tagline: "定义概念、边界与核心机制",
+    space: "workspace/agents/concept-analyst",
+    defaultModel: "glm-5.2",
+    role: "议题圆桌的概念分析师：把模糊术语拆成定义、机制、边界、相邻概念与判断框架。",
+    responsibilities: [
+      "给出一句话定义与分层解释",
+      "区分相邻概念、常见混淆和适用边界",
+      "建立可讨论的维度与因果链",
+      "用具体例子和反例检验概念",
+    ],
+    boundary: "不把流行说法当成学术共识；定义存在流派差异时必须并列呈现。",
+    files: [
+      { path: "workspace/agents/concept-analyst/agent.md", title: "概念拆解 Agent 操作手册", group: "人设 Prompt", desc: "定义、机制、边界、例证与概念地图协议" },
+    ],
+  },
+
+  {
+    key: "critic",
+    kind: "tool",
+    capabilities: [],
+    name: "批判审视 Agent",
+    icon: "△",
+    color: "critic",
+    tagline: "挑战假设、寻找反例与风险",
+    space: "workspace/agents/critical-reviewer",
+    defaultModel: "deepseek-v4-pro",
+    role: "议题圆桌的反方审稿人：审视前序观点的隐含假设、证据强度、反例、失败条件和二阶影响。",
+    responsibilities: [
+      "指出最脆弱的假设和证据缺口",
+      "提出至少一个有力反方解释或反例",
+      "分析失败条件、风险和二阶影响",
+      "给出能证伪或验证关键主张的观察",
+    ],
+    boundary: "批判必须针对论点与证据，不为了唱反调而否定；不能把可能性描述成已证实事实。",
+    files: [
+      { path: "workspace/agents/critical-reviewer/agent.md", title: "批判审视 Agent 操作手册", group: "人设 Prompt", desc: "假设检查、反例、风险与证伪协议" },
+    ],
+  },
+
+  {
     key: "general",
     kind: "tool",
     capabilities: [],
@@ -196,11 +265,12 @@ export function isToolAgentKey(key) {
 
 export function defaultModelFor(key) {
   const e = getRosterEntry(key);
-  if (!e) return "doubao-seed-2-1-pro";
-  if (key === "twin") return "doubao-seed-2-1-pro";
-  if (e.capabilities && e.capabilities.includes("query")) return "doubao-seed-2-1-pro";
-  if (e.capabilities && e.capabilities.includes("execute")) return "doubao-seed-2-1-pro";
-  return "doubao-seed-2-1-lite";
+  if (!e) return "doubao-seed-2.0-pro";
+  if (e.defaultModel) return e.defaultModel;
+  if (key === "twin") return "doubao-seed-2.0-pro";
+  if (e.capabilities && e.capabilities.includes("query")) return "doubao-seed-2.0-pro";
+  if (e.capabilities && e.capabilities.includes("execute")) return "doubao-seed-2.0-code";
+  return "doubao-seed-2.0-lite";
 }
 
 export function getDispatchableAgents() {

@@ -6,7 +6,7 @@ import { getRosterEntry } from "./roster.js";
 import { buildTwinSystem } from "../prompts/twin.js";
 import { buildDataAgentSystem } from "../prompts/data-agent.js";
 import { buildStyleAgentSystem } from "../prompts/style-agent.js";
-import { buildGenericAgentSystem } from "../prompts/generic.js";
+import { buildToolSystem } from "../prompts/generic.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WORKSPACE = join(ROOT, "workspace");
@@ -28,7 +28,7 @@ async function assembleRole(agentKey, uid) {
     if (agentKey === "twin") roleBlock = buildTwinSystem();
     else if (agentKey === "data") roleBlock = buildDataAgentSystem();
     else if (agentKey === "style") roleBlock = buildStyleAgentSystem();
-    else roleBlock = buildGenericAgentSystem(agentKey);
+    else roleBlock = buildToolSystem(agentKey);
   } catch (err) {
     const entry = getRosterEntry(agentKey);
     const spaceRel = (entry && entry.space) || join("workspace", "agents", agentKey);

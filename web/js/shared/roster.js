@@ -5,6 +5,9 @@
 "use strict";
 const AGENT_ROSTER = [
   { key: "twin",          kind: "twin", icon: "◆", name: "Twin · 数字分身",   tagline: "用户的代理人 / 唯一编排者" },
+  { key: "researcher",    kind: "tool", icon: "◉", name: "趋势研究 Agent",   tagline: "扫描热点、生态与关键参与者" },
+  { key: "concept",       kind: "tool", icon: "◇", name: "概念拆解 Agent",   tagline: "定义概念、边界与核心机制" },
+  { key: "critic",        kind: "tool", icon: "△", name: "批判审视 Agent",   tagline: "挑战假设、寻找反例与风险" },
   { key: "data",          kind: "tool", icon: "📊", name: "数据分析 Agent",   tagline: "NL→SQL 真实取数 + 分析归因" },
   { key: "style",         kind: "tool", icon: "✨", name: "样式优化 Agent",   tagline: "把结论排版成可直接交付的报告" },
   { key: "general",       kind: "tool", icon: "🤖", name: "通用 Agent",       tagline: "入口编排者（智能路由）" },

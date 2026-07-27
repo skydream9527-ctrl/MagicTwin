@@ -4,22 +4,40 @@
 // key 解析顺序：
 //   1. $LLM_API_KEY
 //   2. ~/.config/magictwin/credentials  (export LLM_API_KEY=...)
+import "../env.js";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { mockChat } from "./mock-llm.js";
 
 // 基地址：通过 LLM_BASE_URL 配置你的 OpenAI 兼容端点。
 // 形如 https://api.openai.com/v1 或其他兼容网关（末尾不带 /chat/completions）。
 const BASE_URL = (process.env.LLM_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, "");
 const CHAT_URL = `${BASE_URL}/chat/completions`;
 const MODELS_URL = `${BASE_URL}/models`;
-const KEY_RE = /^sk-[A-Za-z0-9_-]{16,196}$/;
+const CONFIGURED_MODELS = [...new Set(
+  (process.env.LLM_MODELS || "")
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean)
+)];
+// 首次启动默认使用离线 Mock，确保没有 .env / API key 时也能完整体验。
+// 只有显式设置 LLM_BACKEND=openai 时才访问外部网关。
+const BACKEND = (process.env.LLM_BACKEND || "mock").trim().toLowerCase();
 
 let cachedKey = null;
 
+// OpenAI 兼容网关的 key 不一定以 sk- 开头（例如火山方舟使用 UUID 形态）。
+// 这里只做最小安全校验：长度合理且不含任何空白，具体有效性由上游网关鉴权。
+export function isValidApiKey(value) {
+  if (typeof value !== "string") return false;
+  const key = value.trim();
+  return key.length >= 16 && key.length <= 512 && !/\s/.test(key);
+}
+
 function fromEnv() {
   const k = (process.env.LLM_API_KEY || "").trim();
-  return KEY_RE.test(k) ? k : null;
+  return isValidApiKey(k) ? k : null;
 }
 
 function fromCredentials() {
@@ -29,7 +47,7 @@ function fromCredentials() {
       const m = line.match(/^\s*export\s+LLM_API_KEY\s*=\s*(.+?)\s*$/);
       if (m) {
         const k = m[1].trim().replace(/^['"]|['"]$/g, "");
-        if (KEY_RE.test(k)) return k;
+        if (isValidApiKey(k)) return k;
       }
     }
   } catch {}
@@ -43,7 +61,11 @@ export function loadKey() {
 }
 
 export function hasKey() {
-  return !!loadKey();
+  return BACKEND === "mock" || !!loadKey();
+}
+
+export function llmBackend() {
+  return BACKEND;
 }
 
 // 底层 HTTP POST：用 node:https（非内置 fetch）。
@@ -92,6 +114,9 @@ function requestJson({ url, headers, payload, timeoutMs }) {
  * @returns {Promise<{content:string, reasoning:string, usage:object, ms:number, model:string}>}
  */
 export async function chat({ model, messages, maxTokens = 2048, temperature = 0.3, timeoutMs = 600000 }) {
+  if (BACKEND === "mock") {
+    return mockChat({ model: model || "mock/magictwin", messages, maxTokens, temperature, timeoutMs });
+  }
   const key = loadKey();
   if (!key) {
     const err = new Error("LLM_KEY_NOT_CONFIGURED");
@@ -142,7 +167,14 @@ export async function chat({ model, messages, maxTokens = 2048, temperature = 0.
 // 列出网关上的 LLM 模型（去重，返回可直接用作 model 参数的字符串）。
 let _modelCache = null;
 export async function listModels() {
+  if (BACKEND === "mock") return ["mock/magictwin"];
   if (_modelCache) return _modelCache;
+  // 某些 OpenAI 兼容网关（包括部分套餐专属端点）不开放 GET /models。
+  // 显式配置时直接采用本地白名单，确保前端稳定展示可用模型。
+  if (CONFIGURED_MODELS.length) {
+    _modelCache = [...CONFIGURED_MODELS];
+    return _modelCache;
+  }
   const key = loadKey();
   if (!key) return [];
   try {

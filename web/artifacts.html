@@ -3,36 +3,74 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>过程产物与日志 · Agent 协作工作空间</title>
+  <title>过程产物与日志 · MagicTwin</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
-<body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="logo">📄</span>
-      <div>
-        <div class="title">过程产物与日志</div>
-        <div class="subtitle" id="sub">加载中…</div>
+<body class="studio-body">
+  <div class="app-shell" id="appShell">
+    <aside class="app-sidebar" id="appSidebar" aria-label="工作区导航">
+      <div class="sidebar-brand">
+        <a class="brand-home" href="/" aria-label="MagicTwin 首页">
+          <span class="brand-mark">MT</span>
+          <span class="brand-copy"><strong>MagicTwin</strong><small>AI 协作工作室</small></span>
+        </a>
+        <button class="icon-button sidebar-collapse" id="sidebarCollapse" type="button" aria-label="收起侧栏" aria-expanded="true">‹</button>
       </div>
-    </div>
-    <div class="status-area">
-      <span id="taskStatus" class="badge hidden"></span>
-      <a class="link" href="/" onclick="window.close();return false;">✕ 关闭</a>
-    </div>
-  </header>
+      <div class="sidebar-scroll">
+        <a class="sidebar-new-task" href="/"><span>＋</span><span class="sidebar-label">建立新目标</span></a>
+        <div class="sidebar-section">工作区</div>
+        <a class="sidebar-nav" href="/">
+          <span class="sidebar-glyph">◎</span>
+          <span class="sidebar-nav-copy"><strong>协作工作室</strong><small>返回当前任务</small></span>
+        </a>
+        <a class="sidebar-nav" href="/config.html">
+          <span class="sidebar-glyph">⚙</span>
+          <span class="sidebar-nav-copy"><strong>模型配置</strong><small>管理 Agent 模型</small></span>
+        </a>
+        <div class="sidebar-section">当前页面</div>
+        <div class="sidebar-nav active" aria-current="page">
+          <span class="sidebar-glyph">▦</span>
+          <span class="sidebar-nav-copy"><strong>过程产物</strong><small>数据、日志与思考</small></span>
+        </div>
+      </div>
+      <div class="sidebar-footer">
+        <span class="profile-dot">YG</span>
+        <span class="sidebar-profile"><strong>任务档案</strong><small>可追溯、可下载</small></span>
+      </div>
+    </aside>
+    <button class="mobile-scrim" id="mobileScrim" type="button" aria-label="关闭导航"></button>
 
-  <div class="art-wrap">
-    <div class="art-goal" id="goal"></div>
-    <div class="tabs">
-      <div class="tab active" data-t="art">过程产物</div>
-      <div class="tab" data-t="log">完整日志</div>
-      <div class="tab" data-t="think">Agent 思考过程</div>
+    <div class="app-content">
+      <header class="topbar">
+        <button class="icon-button mobile-menu" id="mobileSidebarTrigger" type="button" aria-label="打开导航">☰</button>
+        <div class="brand">
+          <div>
+            <div class="title">过程产物与日志</div>
+            <div class="subtitle" id="sub">加载中…</div>
+          </div>
+        </div>
+        <div class="status-area">
+          <span id="taskStatus" class="badge hidden"></span>
+          <a class="ghost-link" href="/">返回协作室</a>
+        </div>
+      </header>
+
+      <main class="art-wrap">
+        <section class="art-goal" id="goal"></section>
+        <div class="tabs" role="tablist" aria-label="任务档案类型">
+          <button class="tab active" type="button" data-t="art" role="tab">过程产物</button>
+          <button class="tab" type="button" data-t="log" role="tab">完整日志</button>
+          <button class="tab" type="button" data-t="think" role="tab">Agent 思考过程</button>
+        </div>
+        <div id="pane-art" class="tabpane active"></div>
+        <div id="pane-log" class="tabpane"></div>
+        <div id="pane-think" class="tabpane"></div>
+      </main>
     </div>
-    <div id="pane-art" class="tabpane active"></div>
-    <div id="pane-log" class="tabpane"></div>
-    <div id="pane-think" class="tabpane"></div>
   </div>
 
-  <script src="/artifacts.js"></script>
+  <script src="/js/shared/shell.js"></script>
+  <script src="/js/artifacts.js"></script>
 </body>
 </html>

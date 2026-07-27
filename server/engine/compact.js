@@ -72,6 +72,7 @@ async function summarizeMiddle({ messages, keepRecentTurns, summaryModel, timeou
   if (middle.length === 0) return { messages, changed: false };
 
   let summaryText = "";
+  let usageRecord = null;
   try {
     const user = `请浓缩下面这段历史对话。用这几个小标题组织（没有内容的可省略）：
 ## 任务与目标
@@ -85,6 +86,13 @@ async function summarizeMiddle({ messages, keepRecentTurns, summaryModel, timeou
 ${buildTranscript(middle)}`;
     const r = await chat({ model: summaryModel, messages: [{ role: "system", content: SUMMARY_SYS }, { role: "user", content: user }], maxTokens: 1500, temperature: 0.2, timeoutMs });
     summaryText = (r.content || "").replace(/^```(?:markdown)?/i, "").replace(/```$/, "").trim();
+    usageRecord = {
+      model: summaryModel,
+      reasoning: r.reasoning || "",
+      raw: r.content || "",
+      ms: r.ms,
+      usage: r.usage || {},
+    };
   } catch {
     summaryText = "";
   }
@@ -94,7 +102,11 @@ ${buildTranscript(middle)}`;
     role: "user",
     content: `【以下是此前对话的压缩摘要（原始明细已省略以节省上下文；真实 SQL 见 sql/、真实结果见 data/、完整对话见 conversation.jsonl）】\n${summaryText}`,
   };
-  return { messages: [messages[0], summaryMsg, ...messages.slice(tailStart)], changed: true };
+  return {
+    messages: [messages[0], summaryMsg, ...messages.slice(tailStart)],
+    changed: true,
+    usageRecord,
+  };
 }
 
 export async function maybeCompact({ key, model, messages, lastUsage, emit, config, force = false }) {
@@ -115,6 +127,7 @@ export async function maybeCompact({ key, model, messages, lastUsage, emit, conf
     msgs = l1.messages;
 
     let summarized = false;
+    let usageRecord = null;
     if (force || estimateTokens(msgs, cpt) > trigger) {
       if (emit) emit({ actor: key, kind: "status", text: "正在压缩上下文…", transient: true });
       const l2 = await summarizeMiddle({
@@ -125,6 +138,7 @@ export async function maybeCompact({ key, model, messages, lastUsage, emit, conf
       });
       msgs = l2.messages;
       summarized = l2.changed;
+      usageRecord = l2.usageRecord || null;
     }
 
     if (l1.archived === 0 && !summarized) return { messages, compacted: false };
@@ -141,7 +155,7 @@ export async function maybeCompact({ key, model, messages, lastUsage, emit, conf
         text: `🗜️ 已自动压缩「${name}」的上下文：${parts.join("、")}（约 ${before} → ${after} tokens，阈值 ${trigger}）。真实 SQL / 结果仍完整保存在 sql/、data/。`,
       });
     }
-    return { messages: msgs, compacted: true, before, after };
+    return { messages: msgs, compacted: true, before, after, usageRecord };
   } catch {
     return { messages, compacted: false };
   }

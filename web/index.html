@@ -3,109 +3,181 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Agent 协作工作空间 · Twin + 数据 + 样式 Agent</title>
+  <title>MagicTwin · AI 协作工作室</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
-<body>
-  <header class="topbar">
-    <div class="brand" id="brand" role="button" tabindex="0" title="返回首页" onclick="goHome()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();goHome()}">
-      <span class="logo">◆</span>
-      <div>
-        <div class="title">Agent 协作工作空间</div>
-        <div class="subtitle">你、数字分身 Twin、数据分析 Agent、样式优化 Agent —— 同一个对话区里协作</div>
+<body class="studio-body">
+  <div class="app-shell" id="appShell">
+    <aside class="app-sidebar" id="appSidebar" aria-label="工作区导航">
+      <div class="sidebar-brand">
+        <a class="brand-home" href="/" aria-label="MagicTwin 首页">
+          <span class="brand-mark">MT</span>
+          <span class="brand-copy">
+            <strong>MagicTwin</strong>
+            <small>多模型圆桌工作台</small>
+          </span>
+        </a>
+        <button class="icon-button sidebar-collapse" id="sidebarCollapse" type="button" aria-label="收起侧栏" aria-expanded="true">‹</button>
       </div>
-    </div>
-    <div class="status-area">
-      <span id="taskStatus" class="badge hidden"></span>
-      <span id="healthLLM" class="chip">LLM …</span>
-      <span id="healthDataQuery" class="chip">数据查询 …</span>
-      <button id="homeBtn" class="ghost hidden" onclick="goHome()">🏠 首页</button>
-      <button id="sideToggle" class="ghost hidden">💬 私聊栏</button>
-      <button id="artifactsBtn" class="ghost hidden">📄 过程产物与日志</button>
-      <button id="newTaskBtn" class="ghost hidden">＋ 新任务</button>
-    </div>
-  </header>
 
-  <!-- 首页（左：Agent 导航栏 · 右：新任务 + 历史画廊）-->
-  <section id="startScreen" class="home">
-    <!-- 左侧栏：Agent 团队 + 配置入口 -->
-    <aside class="home-side">
-      <div class="side-sec-h">你的 Agent 团队</div>
-      <div class="home-agents" id="homeAgents"></div>
-      <a class="side-cfg link" href="/config.html">⚙️ 配置模型</a>
-      <a class="side-cfg link" href="#" onclick="showTrustDashboard();return false;">📊 信任仪表盘</a>
-      <a class="side-cfg link" href="#" onclick="showRiskConfig();return false;">⚠️ 风险规则配置</a>
-      <a class="side-cfg link" href="#" onclick="showExperiencePacks();return false;">📦 经验包管理</a>
+      <div class="sidebar-scroll">
+        <button class="sidebar-new-task" id="sidebarNewTask" type="button" onclick="goHome()">
+          <span aria-hidden="true">＋</span><span class="sidebar-label">发起新议题</span>
+        </button>
+
+        <div class="sidebar-section">工作区</div>
+        <a class="sidebar-nav active" href="/">
+          <span class="sidebar-glyph">◎</span>
+          <span class="sidebar-nav-copy"><strong>圆桌工作台</strong><small>观察与引导 Agent</small></span>
+        </a>
+        <a class="sidebar-nav" href="/config.html">
+          <span class="sidebar-glyph">⚙</span>
+          <span class="sidebar-nav-copy"><strong>模型配置</strong><small>管理每个 Agent</small></span>
+        </a>
+        <button class="sidebar-nav" type="button" onclick="showTrustDashboard()">
+          <span class="sidebar-glyph">↗</span>
+          <span class="sidebar-nav-copy"><strong>信任仪表盘</strong><small>Twin 决策表现</small></span>
+        </button>
+
+        <div class="sidebar-section">最近任务</div>
+        <div class="sidebar-history" id="historyList"><div class="muted">加载中…</div></div>
+      </div>
+
+      <div class="sidebar-footer">
+        <span class="profile-dot">YG</span>
+        <span class="sidebar-profile"><strong>本地工作区</strong><small>数据不会离开设备</small></span>
+      </div>
     </aside>
 
-    <!-- 主区：新任务入口 + 历史任务画廊 -->
-    <main class="home-main">
-      <div class="home-hero">
-        <h1>数据产品 AI 协作工作区</h1>
-        <p class="lead">说出一个数据分析目标，你的数字分身 Twin 会带着数据分析 Agent、样式优化 Agent 替你把事情做完：真实查数、分析归因、排版交付。</p>
-      </div>
+    <button class="mobile-scrim" id="mobileScrim" type="button" aria-label="关闭导航"></button>
 
-      <section class="home-card">
-        <div class="home-card-h"><span class="hc-ico">✍️</span> 布置新任务</div>
-        <textarea id="goalInput" rows="3" placeholder="例如：看看内容中心最近一周消费时长有没有异常，帮我定位下"></textarea>
-        <div class="starters" id="starters"></div>
-        <div class="new-task-foot">
-          <div class="use-models">
-            <span class="um-label">本次使用</span>
-            <!-- Agent 模型 chips 由 app.js:renderUseModelsChips() 从 roster 动态生成 -->
-            <span id="useModels" class="use-models-list"></span>
+    <div class="app-content">
+      <header class="topbar">
+        <button class="icon-button mobile-menu" id="mobileSidebarTrigger" type="button" aria-label="打开导航">☰</button>
+        <div class="brand" id="brand" role="button" tabindex="0" title="返回首页" onclick="goHome()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();goHome()}">
+          <div>
+            <div class="title">多模型圆桌</div>
+            <div class="subtitle">让不同 Agent 独立思考、交叉质疑，再由 Twin 综合</div>
           </div>
-          <button id="startBtn" class="primary">交给 Twin ▸</button>
         </div>
+        <div class="status-area">
+          <span id="taskStatus" class="badge hidden"></span>
+          <button id="tokenUsageChip" class="chip token-chip hidden" type="button" title="查看本任务 Token 用量">Tokens 0</button>
+          <span id="healthLLM" class="chip">LLM …</span>
+          <span id="healthDataQuery" class="chip">数据查询 …</span>
+          <button id="homeBtn" class="ghost hidden" onclick="goHome()">首页</button>
+          <button id="sideToggle" class="ghost hidden">Twin 私聊</button>
+          <button id="artifactsBtn" class="ghost hidden">过程产物</button>
+          <button id="newTaskBtn" class="primary compact hidden">＋ 新任务</button>
+        </div>
+      </header>
+
+      <section id="startScreen" class="home">
+        <main class="home-main studio-column">
+          <div class="home-hero">
+            <span class="eyebrow">MULTI-AGENT WORKSPACE</span>
+            <h1>一个议题，<br />交给多个模型共同讨论。</h1>
+            <p class="lead">Twin 会主持趋势研究、概念拆解与批判审视，让不同模型先独立判断，再交叉验证并形成有分歧、有边界的综合结论。</p>
+          </div>
+
+          <section class="home-card">
+            <div class="home-card-h">
+              <div>
+                <span class="step-index">01</span>
+                <span>发起新议题</span>
+              </div>
+              <span class="home-card-note">输入热点、AI 话题或你想弄懂的概念</span>
+            </div>
+            <textarea id="goalInput" rows="4" placeholder="例如：多 Agent 系统什么时候会优于单 Agent？请从技术收益、协作成本、失败条件和适用场景展开讨论。"></textarea>
+            <div class="starters" id="starters"></div>
+            <div class="new-task-foot">
+              <div class="use-models">
+                <span class="um-label">默认圆桌</span>
+                <span id="useModels" class="use-models-list"></span>
+              </div>
+              <button id="startBtn" class="primary">发起圆桌 <span aria-hidden="true">→</span></button>
+            </div>
+          </section>
+
+          <div class="home-block-h">
+            <div><span class="step-index">02</span><span>Agent 团队</span></div>
+            <span class="hint">点击查看职责、边界与相关文件</span>
+          </div>
+          <div class="home-agents" id="homeAgents"></div>
+        </main>
       </section>
 
-      <div class="home-block-h"><span>历史任务</span><span class="hint">点击卡片可回溯</span></div>
-      <div class="home-history" id="historyList"><div class="muted">加载中…</div></div>
-    </main>
-  </section>
+      <main id="workspace" class="workspace hidden">
+        <section class="ws-main">
+          <div class="goal-bar">
+            <span class="goal-index">01</span>
+            <span class="goal-copy"><small>当前目标</small><strong id="goalText"></strong></span>
+            <div class="task-controls">
+              <button id="pauseBtn" class="ghost small hidden" onclick="pauseTask()">暂停</button>
+              <button id="resumeBtn" class="ghost small hidden" onclick="resumeTask()">恢复</button>
+              <button id="abortBtn" class="ghost small hidden" onclick="abortTask()">终止</button>
+              <button id="downloadBtn" class="ghost small hidden" onclick="downloadBundle()">下载</button>
+            </div>
+          </div>
+          <div id="agentStrip" class="agent-strip" aria-label="Agent 团队状态"></div>
+          <div class="conv-head">
+            <span>圆桌讨论</span>
+            <span class="hint">Twin 并行派发多个视角，各 Agent 独立执行，完成后统一综合</span>
+          </div>
+          <div id="feed" class="feed"></div>
+          <div id="composer" class="composer">
+            <select id="injectTarget" title="选择插话对象"></select>
+            <input id="injectInput" placeholder="补充指示，或要求团队调整方向…" />
+            <button id="injectSend" class="primary">发送给团队</button>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
 
-  <!-- 工作空间：主对话区（左） + 与 Twin 私聊副对话区（右），并列常驻 -->
-  <main id="workspace" class="workspace hidden">
-    <!-- 主对话区 -->
-    <section class="ws-main">
-      <div class="goal-bar">
-        <span class="goal-label">目标</span>
-        <span id="goalText"></span>
-        <div class="task-controls">
-          <button id="pauseBtn" class="ghost small hidden" onclick="pauseTask()">⏸️ 暂停</button>
-          <button id="resumeBtn" class="ghost small hidden" onclick="resumeTask()">▶️ 恢复</button>
-          <button id="abortBtn" class="ghost small hidden" onclick="abortTask()">⏹️ 终止</button>
-          <button id="downloadBtn" class="ghost small hidden" onclick="downloadBundle()">📦 下载产物</button>
-        </div>
+  <button class="drawer-scrim hidden" id="drawerScrim" type="button" aria-label="关闭详情面板"></button>
+  <aside id="sidePanel" class="side-panel hidden" aria-label="Twin 私聊、过程产物与 Token 用量">
+    <div class="drawer-head" id="drawerDragHandle">
+      <div>
+        <strong>任务详情</strong>
+        <small>拖动标题栏移动 · 右下角调整大小 · 不阻塞主对话</small>
       </div>
-      <div id="agentStrip" class="agent-strip"></div>
-      <div class="conv-head">
-        <span class="dot conv"></span> 主对话区 · 协作
-        <span class="hint">你 · Twin · 数据 Agent · 样式 Agent 连续对话；确认项 / 代答 / 真实查询 / 排版 / 打回 都在这里发生</span>
-      </div>
-      <div id="feed" class="feed"></div>
-      <div id="composer" class="composer">
-        <!-- @ 提及下拉由 app.js:renderInjectTarget() 从 roster 动态生成 -->
-        <select id="injectTarget" title="选择插话对象"></select>
-        <input id="injectInput" placeholder="随时插话：@ 某个 Agent 补充要求、纠偏或回复升级问题…" />
-        <button id="injectSend" class="primary">发送</button>
-      </div>
-    </section>
-
-    <!-- 副对话区：与 Twin 私聊（问进度 / 问它替你做了啥），不打断主编排 -->
-    <aside id="sidePanel" class="side-panel">
-      <div class="side-h">
-        <span class="dot" style="background:var(--twin)"></span> 副对话区 · 与 Twin 私聊
-      </div>
-      <div class="side-sub">只和你的分身单聊：问进度、问它替你做了哪些决定，不打断主流程</div>
+      <button class="icon-button" id="sideClose" type="button" aria-label="关闭详情面板">×</button>
+    </div>
+    <div class="drawer-tabs" role="tablist" aria-label="详情面板">
+      <button class="drawer-tab active" id="drawerTwinTab" type="button" role="tab" aria-selected="true">Twin 私聊</button>
+      <button class="drawer-tab" id="drawerArtifactsTab" type="button" role="tab" aria-selected="false">过程产物</button>
+      <button class="drawer-tab" id="drawerUsageTab" type="button" role="tab" aria-selected="false">Token 用量</button>
+    </div>
+    <div id="drawerTwinPane" class="drawer-pane">
+      <div class="side-sub">这是你与 Twin 的策略对话，不会直接打断团队协作。</div>
       <div id="sideFeed" class="side-feed"></div>
       <div class="side-composer">
         <input id="sideInput" placeholder="问 Twin：进度到哪了？" />
-        <button id="sideSend" class="primary">问</button>
+        <button id="sideSend" class="primary compact">发送</button>
       </div>
-    </aside>
-  </main>
+    </div>
+    <div id="drawerArtifactsPane" class="drawer-pane hidden">
+      <div class="drawer-empty-state">
+        <span class="drawer-file-mark">▦</span>
+        <strong>查看完整过程产物</strong>
+        <p>查询结果、SQL、决策记录、完整日志和 Agent 思考过程都归档在任务产物页。</p>
+        <button id="artifactsOpenFull" class="primary">打开产物与日志</button>
+      </div>
+    </div>
+    <div id="drawerUsagePane" class="drawer-pane hidden">
+      <div id="usageStats" class="usage-stats">
+        <div class="usage-empty">任务开始后，这里会显示模型 Token 用量。</div>
+      </div>
+    </div>
+    <div id="drawerResizeHandle" class="drawer-resize-handle" role="separator" aria-label="拖动调整面板大小" title="拖动调整面板大小"></div>
+  </aside>
 
-  <script src="/app.js"></script>
+  <script src="/js/shared/dom.js"></script>
+  <script src="/js/shared/markdown.js"></script>
+  <script src="/js/shared/roster.js"></script>
+  <script src="/js/shared/shell.js"></script>
+  <script src="/js/app.js"></script>
 </body>
 </html>
