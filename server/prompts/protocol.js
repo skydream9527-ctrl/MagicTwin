@@ -27,12 +27,15 @@ export const UNIFIED_PROTOCOL = `
 | type | 含义 | 下一个发言者 |
 |------|------|-------------|
 | ask | 向 Twin 提确认项（口径/方向/是否下钻） | Twin |
-| query | 提交一条只读 SELECT，后端真实执行并回喂结果 | 你自己（继续） |
-| execute | 提交一段代码到沙箱执行（仅当代码执行能力开放） | 你自己（继续） |
+| query | 提交一条只读 SELECT，后端真实执行并回喂结果（需 query 能力） | 你自己（继续） |
+| execute_python | 提交一段代码到沙箱执行（需 execute 能力，别名 execute） | 你自己（继续） |
+| read_skill | 读取本地技能说明文档（全员可用） | 你自己（继续） |
+| write_file | 将结果/报告写入任务产物区（全员可用） | 你自己（继续） |
+| now | 获取当前时间（全员可用） | 你自己（继续） |
 | report | 把阶段性或最终结论交回 Twin | Twin |
 | styled | 排版稿交回 Twin（仅样式优化 Agent） | Twin |
 
-> query / execute **仅当你被显式声明了对应 capability 时才可用**；否则视为不可调用。
+> query/execute_python **仅当你被显式声明了对应 capability 时才可用**；read_skill/write_file/now 全员可用。
 
 ## 3. 不可用工具的处理
 你 agent.md 里可能提到很多工具（数据库 CLI、Python 沙箱、告警系统、报告模板引擎等）。**本工作空间只暴露上表中的动作**。其它工具：
@@ -61,10 +64,15 @@ export function buildProtocolWithCapabilities(caps = []) {
 - 报错时读 error/code 改写 SQL 重试，不要重复相同错误。`);
   }
   if (caps.includes("execute")) {
-    sections.push(`## 你被授予的能力：execute（代码沙箱）
-- 你可以用 type="execute" 提交一段 Python 代码（pandas/sklearn 等可用）。
+    sections.push(`## 你被授予的能力：execute_python（代码沙箱）
+- 你可以用 type="execute_python"（或别名 execute）提交一段 Python 代码（pandas/sklearn 等可用）。
 - 后端会送到沙箱执行，把 stdout / stderr / 产物清单回喂给你。
 - 一次一段；超时/资源限制由后端强制；失败时改写代码重试。`);
   }
+  // 全员可用的通用工具
+  sections.push(`## 全员可用工具（无需额外授权）
+- **read_skill**：读技能文档。用 { "type":"read_skill", "skill_id":"xxx", "path":"references/xxx.md（可选）" }
+- **write_file**：写文件到任务产物区。用 { "type":"write_file", "path":"xxx.md", "content":"..." }
+- **now**：取当前 UTC 时间。用 { "type":"now" }`);
   return sections.length ? `${UNIFIED_PROTOCOL}\n\n${sections.join("\n\n")}` : UNIFIED_PROTOCOL;
 }

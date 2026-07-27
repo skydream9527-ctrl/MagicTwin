@@ -16,18 +16,17 @@
 //         JSON 解析容错 + 多次重试。每次 LLM 调用的 reasoning + 原始输出写入思考日志。
 //         上下文自动压缩（auto-compact，见 engine/compact.js）：每次调 Agent 前按 token 预算压缩其上下文。
 import { chat } from "../integrations/llm.js";
-import { runQuery } from "../integrations/data-query.js";
-import { runPython } from "../integrations/sandbox.js";
 import { CONFIG } from "../config.js";
-import { appendEvent, appendDecision, appendThinking, updateMeta, writeState, getMeta, readDecisions, readEvents, saveSql, saveData, appendFeedback } from "../domain/store.js";
+import { appendEvent, appendDecision, appendThinking, updateMeta, writeState, getMeta, readDecisions, readEvents, saveSql, saveData, appendFeedback, saveFile } from "../domain/store.js";
 import { buildSystemFor, buildBriefMessages, fallbackBrief, buildReflectMessages, parseReflectOutput, summarizeDecisions, summarizeConversation, extractSceneKeywords } from "../prompts/index.js";
-import { getRosterEntry, isToolAgentKey, defaultModelFor } from "../domain/roster.js";
+import { getRosterEntry, isToolAgentKey, defaultModelFor, hasCapability, getDispatchableAgents } from "../domain/roster.js";
 import { normQuestions } from "../domain/events.js";
 import { maybeCompact } from "./compact.js";
 import { getRiskConfig } from "../domain/risk.js";
 import { getTrust, shouldAutoAnswer } from "../domain/trust.js";
 import { calibrate } from "../domain/calibrate.js";
 import { createCandidate } from "../domain/experience.js";
+import { runTool, toolFor, CONTROL_TYPES } from "./tools.js";
 
 // —— 风险硬护栏：检查 Twin 代答是否命中强制升级规则 ——
 function shouldForceEscalate(action) {
@@ -275,6 +274,7 @@ export async function runOrchestration({ tid, goal, mode = "task", models, team,
   let twinSynthesis = null;
   const discussionReports = [];
   const consultedAgents = new Set();
+  let pendingFanout = []; // fanout 模式下等待执行的 Agent 队列
 
   if (isResume) {
     const main = resumeEvents.filter((e) => e.channel !== "side");
@@ -335,6 +335,8 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
   const routeInjection = async (inj) => {
     const to = (inj.to === "twin" || isToolAgentKey(inj.to)) ? inj.to : "twin";
     emit({ actor: "user", kind: "inject", channel: "main", to, text: inj.text });
+    // 用户插话，清空并行队列，回到用户指定的目标
+    pendingFanout = [];
     if (to === "twin") {
       const framing = inj.kind === "reply" ? "【用户回复】" : "【用户 @你 说】";
       (await msgsFor("twin")).push({ role: "user", content: `${framing}${inj.text}` });
@@ -715,6 +717,24 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
           (await msgsFor(target)).push({ role: "user", content: twinSynthesisToStyleText(synthesis, goal) });
           emitBrief({ actionType: "accept", agent: "twin", deliverable: "Twin 总结果" });
           turn = target;
+        } else if (a.type === "fanout" && Array.isArray(a.targets) && a.targets.length > 0) {
+          // 并行派活：同时给多个工具 Agent 派任务，并行执行
+          const validTargets = a.targets.filter(t => t && isToolAgentKey(t.target) && t.message);
+          if (validTargets.length === 0) {
+            (await msgsFor("twin")).push({ role: "user", content: "fanout.targets 中没有合法的工具 Agent key，请重新输出。" });
+            continue;
+          }
+          emit({ actor: "twin", kind: "fanout", channel: "main", text: a.thought || "并行派发任务", targets: validTargets.map(t => t.target) });
+          for (const t of validTargets) {
+            const assignMsg = { type: "assign", message: t.message, target: t.target };
+            emit({ actor: "twin", kind: "assign", channel: "main", to: t.target, text: t.message, thought: a.thought });
+            (await msgsFor(t.target)).push({ role: "user", content: twinToAgentText(assignMsg) });
+          }
+          emitBrief({ actionType: "fanout", agent_count: validTargets.length, deliverable: "并行任务" });
+          // 先让第一个 Agent 开始执行，其他的排队执行
+          turn = validTargets[0].target;
+          // 标记剩余待执行的 fanout 任务
+          pendingFanout = validTargets.slice(1).map(t => t.target);
         } else if (a.type === "beautify") {
           if (discussionMode && consultedAgents.size < requiredDiscussionCount) {
             const remaining = discussionExperts.filter((key) => !consultedAgents.has(key));
@@ -786,59 +806,62 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
         (await msgsFor(turn)).push({ role: "assistant", content: r.raw });
         if (!a) { emit({ actor: "system", kind: "error", text: `${agent.name} 输出无法解析，已停止。` }); updateMeta(tid, { status: "报错" }); turn = null; continue; }
 
-        if (a.type === "query" && caps.includes("query")) {
-          const name = (a.name || `T${steps}`).replace(/[^\w.\-]/g, "_");
-          if (!a.sql || !a.sql.trim()) {
-            (await msgsFor(turn)).push({ role: "user", content: `【格式错误】你输出了 type="query" 但 sql 字段为空。请重新输出完整的 JSON，确保 sql 字段包含可执行的 SELECT 语句。参考格式：{ "thought":"...", "type":"query", "name":"T${steps}_xxx", "purpose":"查询目的", "sql":"SELECT ... FROM ... WHERE ..." }` });
-            turn = turn;
-          } else {
-          emit({ actor: turn, kind: "tool_call", channel: "main", text: a.purpose || "执行查询", sql: a.sql, name });
-          const res = await runQuery(a.sql || "");
-          saveSql(tid, name, a.sql || "");
-          if (res.ok) saveData(tid, name, { sql: a.sql, columns: res.columns, records: res.records });
-          emit({
-            actor: "system", kind: "tool_result", channel: "main", name, ok: res.ok, ms: res.ms,
-            rowCount: res.rowCount, columns: res.columns, colTypes: res.colTypes,
-            records: res.ok ? res.records.slice(0, 200) : undefined,
-            error: res.error, code: res.code, by: turn,
-          });
-          (await msgsFor(turn)).push({ role: "user", content: toolResultText(name, res) });
-          turn = turn;
+        const type = a.type;
+        // 先看是否是控制流类型（ask/report/styled）
+        if (CONTROL_TYPES.has(type)) {
+          if (type === "ask") {
+            const askQuestions = normQuestions(a.questions);
+            emit({ actor: turn, kind: "ask", channel: "main", to: "twin", text: a.message || "", questions: askQuestions });
+            (await msgsFor("twin")).push({ role: "user", content: agentAskText(a, agent) });
+            // 如果有fanout排队，ask需要Twin回答，中断并行队列
+            pendingFanout = [];
+            turn = "twin";
+          } else if (type === "report") {
+            lastReport = { summary: a.summary || "", findings: a.findings || [], by: turn };
+            discussionReports.push(lastReport);
+            if (discussionExperts.includes(turn)) consultedAgents.add(turn);
+            emit({ actor: turn, kind: "report", channel: "main", to: "twin", text: a.message || "", summary: a.summary || "", findings: a.findings || [], final: !!a.final, artifacts: a.artifacts || [] });
+            const remaining = discussionExperts.filter((key) => !consultedAgents.has(key));
+            (await msgsFor("twin")).push({
+              role: "user",
+              content: agentReportText(a, agent, discussionMode ? { remaining } : null),
+            });
+            // 如果是fanout模式，且还有待执行的Agent，继续执行下一个
+            if (pendingFanout.length > 0) {
+              turn = pendingFanout.shift();
+              emit({ actor: "system", kind: "notice", text: `继续执行并行任务：${(getRosterEntry(turn)?.name) || turn}`, transient: true });
+            } else {
+              turn = "twin";
+            }
+          } else if (type === "styled") {
+            emit({ actor: turn, kind: "styled", channel: "main", to: "twin", title: a.title || "", summary: a.summary || "", highlights: a.highlights || [], sections: a.sections || [], text: a.message || "" });
+            (await msgsFor("twin")).push({ role: "user", content: styledReportText(a) });
+            turn = "twin";
           }
-        } else if (a.type === "execute" && caps.includes("execute")) {
-          const en = (a.name || `E${steps}`).replace(/[^\w.\-]/g, "_");
-          emit({ actor: turn, kind: "tool_call", channel: "main", text: a.purpose || "执行代码", code: a.code, name: en, lang: "python" });
-          const res = await runPython(a.code || "");
-          emit({
-            actor: "system", kind: "tool_result", channel: "main", name: en, ok: res.ok, ms: res.ms,
-            stdout: res.ok ? (res.stdout || "").slice(0, 8000) : undefined,
-            stderr: (res.stderr || "").slice(0, 4000),
-            error: res.error, code: res.code, lang: "python",
-          });
-          (await msgsFor(turn)).push({ role: "user", content: codeResultText(en, res) });
-          turn = turn;
-        } else if (a.type === "ask") {
-          const askQuestions = normQuestions(a.questions);
-          emit({ actor: turn, kind: "ask", channel: "main", to: "twin", text: a.message || "", questions: askQuestions });
-          (await msgsFor("twin")).push({ role: "user", content: agentAskText(a, agent) });
-          turn = "twin";
-        } else if (a.type === "report") {
-          lastReport = { summary: a.summary || "", findings: a.findings || [], by: turn };
-          discussionReports.push(lastReport);
-          if (discussionExperts.includes(turn)) consultedAgents.add(turn);
-          emit({ actor: turn, kind: "report", channel: "main", to: "twin", text: a.message || "", summary: a.summary || "", findings: a.findings || [], final: !!a.final, artifacts: a.artifacts || [] });
-          const remaining = discussionExperts.filter((key) => !consultedAgents.has(key));
-          (await msgsFor("twin")).push({
-            role: "user",
-            content: agentReportText(a, agent, discussionMode ? { remaining } : null),
-          });
-          turn = "twin";
-        } else if (a.type === "styled") {
-          emit({ actor: turn, kind: "styled", channel: "main", to: "twin", title: a.title || "", summary: a.summary || "", highlights: a.highlights || [], sections: a.sections || [], text: a.message || "" });
-          (await msgsFor("twin")).push({ role: "user", content: styledReportText(a) });
-          turn = "twin";
         } else {
-          (await msgsFor(turn)).push({ role: "user", content: "请从 ask/query/report 中选择一个合法 type 再输出（只输出一个 JSON 对象）。" });
+          // 交给通用工具层处理
+          const tool = toolFor(type);
+          if (!tool) {
+            (await msgsFor(turn)).push({ role: "user", content: `未知动作 type="${type}"。请只用 ask/report${caps.includes("query") ? "/query" : ""}${caps.includes("execute") ? "/execute_python" : ""}/read_skill/write_file/now 中的合法动作，只输出一个 JSON 对象。` });
+            turn = turn;
+            continue;
+          }
+          if (tool.capability && !hasCapability(turn, tool.capability)) {
+            (await msgsFor(turn)).push({ role: "user", content: `你不具备「${tool.capability}」能力，无法执行 ${type}。若确需，请在 report 里建议 Twin 改派给具备该能力的 Agent。` });
+            turn = turn;
+            continue;
+          }
+          // 执行工具
+          const out = await runTool(type, a, { tid, agentKey: turn });
+          if (out.retry) {
+            (await msgsFor(turn)).push({ role: "user", content: out.correction });
+            turn = turn;
+            continue;
+          }
+          if (out.callEvent) emit({ actor: turn, kind: "tool_call", channel: "main", ...out.callEvent });
+          if (out.resultEvent) emit({ actor: "system", kind: "tool_result", channel: "main", by: turn, ...out.resultEvent });
+          (await msgsFor(turn)).push({ role: "user", content: out.forLLM });
+          turn = turn;
         }
       } else {
         turn = "twin";

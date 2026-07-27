@@ -12,6 +12,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { ROSTER } from "../domain/roster.js";
+import { skillIndexText } from "../domain/skills.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TWIN_DIR = join(ROOT, "workspace", "users", "u_local", "twin");
@@ -55,9 +56,13 @@ export function buildTwinSystem() {
   const manual = readFileSync(join(TWIN_DIR, "agent.md"), "utf8");
   const profile = loadProfile();
   const agents = buildAgentsSection();
-  const base = manual
+  const skills = skillIndexText();
+  let base = manual
     .split("{{PROFILE}}").join(profile)
     .split("{{AGENTS}}").join(agents);
+  if (skills) {
+    base += `\n\n${skills}`;
+  }
   const learn = readLearnings(TWIN_DIR);
   return learn ? `${base}\n\n# 从过往任务中沉淀的经验（每日自动进化，可被人工审阅覆盖）\n\n${learn}` : base;
 }

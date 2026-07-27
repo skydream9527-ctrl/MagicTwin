@@ -276,3 +276,11 @@ export function defaultModelFor(key) {
 export function getDispatchableAgents() {
   return ROSTER.filter(a => a.kind === "tool" && (!a.status || a.status === "published"));
 }
+
+export function hasCapability(agentKey, cap) {
+  const e = getRosterEntry(agentKey);
+  if (!e) return false;
+  if (e.kind === "twin") return true; // Twin 编排者默认拥有所有能力，可以调度工具
+  const caps = e.capabilities || [];
+  return caps.includes(cap) || caps.includes("*");
+}

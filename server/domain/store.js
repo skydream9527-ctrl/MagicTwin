@@ -49,6 +49,7 @@ export function createTask(goal, models = {}, team = [], mode = "task") {
   const dir = taskDir(tid);
   ensureDir(join(dir, "sql"));
   ensureDir(join(dir, "data"));
+  ensureDir(join(dir, "artifacts"));
   const now = new Date().toISOString();
   const meta = {
     tid,
@@ -303,4 +304,26 @@ export function getTaskBundle(tid) {
     data,
     state_md: readFileSafe("STATE.md"),
   };
+}
+
+export function saveFile(tid, relPath, content) {
+  const dir = taskDir(tid);
+  const full = join(dir, "artifacts", relPath);
+  ensureDir(dirname(full));
+  writeFileSync(full, content, "utf8");
+  return full;
+}
+
+export function listArtifacts(tid) {
+  const dir = join(taskDir(tid), "artifacts");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { recursive: true })
+    .filter(f => statSync(join(dir, f)).isFile())
+    .map(f => ({ path: f, size: statSync(join(dir, f)).size }));
+}
+
+export function readArtifact(tid, relPath) {
+  try {
+    return readFileSync(join(taskDir(tid), "artifacts", relPath), "utf8");
+  } catch { return null; }
 }
