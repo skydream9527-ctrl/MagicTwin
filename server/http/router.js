@@ -33,6 +33,7 @@ import { hasRealBackend } from "../integrations/data-query.js";
 import { isSandboxEnabled } from "../integrations/sandbox.js";
 import { createTask, getMeta, updateMeta, readEvents, readDecisions, readThinking, summarizeUsage, listTasks, getAgentConfig, saveAgentConfig, getTaskBundle, appendFeedback } from "../domain/store.js";
 import { getAgentList, getAgentDetail } from "../domain/agents.js";
+import { buildModelChoices } from "../domain/models.js";
 import { ROSTER, isToolAgentKey, defaultModelFor, getDispatchableAgents, AGENT_KEYS } from "../domain/roster.js";
 import { runTwinInquiry } from "../engine/orchestrator.js";
 import { rt, peek, ssePush, enqueueInjection, startOrchestration } from "./runtime.js";
@@ -81,12 +82,17 @@ export async function handleRequest(req, res) {
     });
   }
   if (path === "/api/models" && method === "GET") {
+    // 网关返回大量模型，每个供应商只保留 3 个（自家模型优先，按版本从新到旧）
+    // 推荐模型、各 Agent 默认模型、已保存配置一定保留，避免已选项消失
     const all = await listModels();
+    const defaults = resolvedConfigMap();
+    const pinned = [...Object.values(defaults)];
     const preferred = RECOMMENDED_MODELS.filter((model) => all.includes(model));
-    const recommended = llmBackend() === "mock"
-      ? ["mock/magictwin"]
-      : (preferred.length ? preferred : all);
-    return sendJson(res, 200, { recommended, all, defaults: resolvedConfigMap() });
+    return sendJson(res, 200, {
+      recommended: llmBackend() === "mock" ? ["mock/magictwin"] : (preferred.length ? preferred : all.slice(0, 8)),
+      all: llmBackend() === "mock" ? ["mock/magictwin"] : buildModelChoices(all, pinned),
+      defaults
+    });
   }
   // Agent 详情：概览列表 + 单个 Agent 的元信息与关联文件（人设 Prompt / 知识库 / 技能包）
   if (path === "/api/agents" && method === "GET") {
