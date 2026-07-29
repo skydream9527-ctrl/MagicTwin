@@ -6,6 +6,7 @@ import { buildTwinSystem } from "./twin.js";
 import { buildDataAgentSystem } from "./data-agent.js";
 import { buildStyleAgentSystem } from "./style-agent.js";
 import { buildToolSystem } from "./generic.js";
+import { buildModeratorSystem, buildPanelistSystem, panelText } from "./roundtable.js";
 
 export async function buildSystemFor(key, uid = "u_local", taskContext = {}) {
   try {
@@ -132,3 +133,5 @@ export function summarizeConversation(events) {
     return `- ${who}/${e.kind}: ${String(t).slice(0, 100)}`;
   }).join("\n");
 }
+
+export { buildModeratorSystem, buildPanelistSystem, panelText };

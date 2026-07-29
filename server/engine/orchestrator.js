@@ -268,6 +268,17 @@ export async function runOrchestration({ tid, goal, mode = "task", models, team,
     return r;
   };
 
+  // —— 并发限制器：最多 limit 个分支同时跑，避免一次性对 LLM / 数据源发起过多请求 ——
+  const mapLimit = async (items, limit, fn) => {
+    const ret = new Array(items.length);
+    let i = 0;
+    const workers = new Array(Math.max(1, Math.min(limit, items.length))).fill(0).map(async () => {
+      while (i < items.length) { const idx = i++; ret[idx] = await fn(items[idx], idx); }
+    });
+    await Promise.all(workers);
+    return ret;
+  };
+
   let turn = "twin";
   let steps = 0;
   let lastReport = null;
@@ -528,7 +539,7 @@ ${historyBrief}${doneQueries ? `\n\n已完成的真实查询与结果样本：\n
       return { key, status: "limit" };
     };
 
-    const results = await Promise.all(assignments.map(runWorker));
+    const results = await mapLimit(assignments, 3, runWorker);
     const reports = results.filter((result) => result.status === "report");
     for (const result of reports) {
       lastReport = result.report;
