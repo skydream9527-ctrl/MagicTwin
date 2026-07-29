@@ -137,7 +137,7 @@ export async function handleRequest(req, res) {
     const team = Array.isArray(body.team)
       ? [...new Set(body.team)].filter((k) => typeof k === "string" && k !== "twin" && dispatchable.has(k))
       : [];
-    const mode = body.mode === "discussion" ? "discussion" : "task";
+    const mode = (body.mode === "discussion" || body.mode === "roundtable") ? "discussion" : "task";
     const meta = createTask(goal, models, team, mode);
     rt(meta.tid).fresh = true; // 仅本进程新建的任务才允许启动编排
     return sendJson(res, 200, { tid: meta.tid });
