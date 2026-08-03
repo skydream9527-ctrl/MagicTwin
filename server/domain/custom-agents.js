@@ -2,12 +2,14 @@
 // 存储：workspace/agents/{key}/ 下创建目录和文件。
 // 运行时动态加入 roster（不修改 roster.js 源码）。
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const AGENTS_DIR = join(ROOT, "workspace", "agents");
+const AGENTS_DIR = process.env.MAGICTWIN_AGENTS_DIR
+  ? resolve(process.env.MAGICTWIN_AGENTS_DIR)
+  : join(ROOT, "workspace", "agents");
 const CUSTOM_INDEX = join(AGENTS_DIR, "custom-agents.json");
 
 function readCustomIndex() {
@@ -20,16 +22,31 @@ function writeCustomIndex(index) {
   writeFileSync(CUSTOM_INDEX, JSON.stringify(index, null, 2));
 }
 
+export function normalizeCustomAgentKey(value) {
+  const suppliedKey = String(value || "").trim();
+  const slug = suppliedKey
+    .replace(/[^a-zA-Z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .toLowerCase()
+    .slice(0, 32);
+  return /^[a-z][a-z0-9-]{1,31}$/.test(slug)
+    ? slug
+    : `agent-${Date.now().toString(36).slice(-7)}`;
+}
+
 export function createCustomAgent(spec) {
-  if (!spec.key || !spec.name) throw new Error("key 和 name 必填");
-  const key = spec.key.replace(/[^a-zA-Z0-9-]/g, "-").toLowerCase().slice(0, 32);
+  if (!spec.name || !String(spec.name).trim()) throw new Error("name 必填");
+  const key = normalizeCustomAgentKey(spec.key);
 
   const agentDir = join(AGENTS_DIR, key);
   if (!existsSync(agentDir)) mkdirSync(agentDir, { recursive: true });
   mkdirSync(join(agentDir, "knowledge"), { recursive: true });
   mkdirSync(join(agentDir, "memory"), { recursive: true });
 
-  const agentMd = spec.agentMd || `# ${spec.name}\n\n${spec.role || "自定义工具 Agent"}\n`;
+  const name = String(spec.name).trim().slice(0, 60);
+  const role = String(spec.role || "自定义工具 Agent").trim().slice(0, 4000);
+  const agentMd = spec.agentMd || `# ${name}\n\n${role}\n`;
   writeFileSync(join(agentDir, "agent.md"), agentMd);
 
   if (spec.knowledgeFiles && Array.isArray(spec.knowledgeFiles)) {
@@ -43,12 +60,14 @@ export function createCustomAgent(spec) {
 
   const entry = {
     key,
-    name: spec.name,
-    icon: spec.icon || "🤖",
+    name,
+    icon: String(spec.icon || "🤖").slice(0, 8),
     color: spec.color || "#8a8a8a",
-    tagline: spec.tagline || "",
-    role: spec.role || "",
-    capabilities: spec.capabilities || [],
+    tagline: String(spec.tagline || "自定义协作 Agent").trim().slice(0, 120),
+    role,
+    capabilities: Array.isArray(spec.capabilities)
+      ? [...new Set(spec.capabilities.filter((cap) => cap === "query" || cap === "execute"))]
+      : [],
     status: "published",
     custom: true,
     createdAt: new Date().toISOString(),
@@ -85,6 +104,9 @@ export function getCustomAgentSpecs() {
     space: `workspace/agents/${a.key}`,
     boundary: "面对的甲方是 Twin 而非用户本人；不替用户拍板。",
     responsibilities: [],
+    files: [
+      { path: `workspace/agents/${a.key}/agent.md`, title: `${a.name} 操作手册`, group: "人设 Prompt", desc: "自定义 Agent 的职责与工作说明" },
+    ],
     custom: true,
   }));
 }

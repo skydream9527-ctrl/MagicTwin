@@ -70,6 +70,7 @@ export function startOrchestration(tid) {
     mode: meta.mode || "task",
     models: meta.models,
     team: meta.team || [],
+    participants: meta.participants || [],
     resumeEvents,
     ssePush: (e) => ssePush(tid, e),
     takeInjections,

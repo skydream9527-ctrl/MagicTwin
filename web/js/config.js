@@ -8,20 +8,31 @@ const FALLBACK_AGENTS = [
   { key: "style", icon: "✨", color: "style", name: "样式优化 Agent", tagline: "把结论排版成可直接交付的报告" },
 ];
 
-let rec = [], all = [], cur = {}, agents = FALLBACK_AGENTS;
+let rec = [], all = [], cur = {}, agents = FALLBACK_AGENTS, providers = [];
 
 async function init() {
   try {
-    const h = await (await fetch("/api/health")).json();
+    const h = await (await fetch("api/health")).json();
     const isMock = h.llm?.backend === "mock";
-    const m = $("#healthLLM"); m.textContent = isMock ? "LLM Mock" : h.hasKey ? "LLM 已连接" : "LLM 未配置"; m.className = "chip " + (h.hasKey ? "ok" : "bad");
+    providers = Array.isArray(h.providers) ? h.providers : [];
+    const connected = providers.filter((provider) => provider.configured && provider.id !== "mock");
+    const m = $("#healthLLM");
+    m.textContent = isMock ? "LLM Mock" : h.hasKey ? `${connected.length || 1} 个 LLM 已连接` : "LLM 未配置";
+    m.className = "chip " + (h.hasKey ? "ok" : "bad");
+    renderProviderStatus();
   } catch {}
   try {
-    const d = await (await fetch("/api/agents")).json();
+    const d = await (await fetch("api/agents")).json();
     if (Array.isArray(d.agents) && d.agents.length) agents = d.agents;
   } catch {}
-  try { const d = await (await fetch("/api/models")).json(); rec = d.recommended || []; all = d.all || []; } catch {}
-  try { cur = await (await fetch("/api/agent-config")).json(); } catch { cur = {}; }
+  try {
+    const d = await (await fetch("api/models")).json();
+    rec = d.recommended || [];
+    all = d.all || [];
+    if (Array.isArray(d.providers)) providers = d.providers;
+    renderProviderStatus();
+  } catch {}
+  try { cur = await (await fetch("api/agent-config")).json(); } catch { cur = {}; }
   render();
   $("#saveBtn").onclick = save;
 }
@@ -42,16 +53,64 @@ function render() {
   agents.forEach((a) => fillSelect($("#sel-" + a.key), cur[a.key]));
 }
 
+function renderProviderStatus() {
+  const box = $("#providerStatus");
+  if (!box) return;
+  const visible = providers.filter((provider) => provider.id !== "openai-compatible" || provider.configured);
+  box.innerHTML = visible.map((provider) => `
+    <span class="provider-pill ${provider.configured ? "connected" : "offline"}">
+      <span class="provider-dot"></span>${esc(provider.label || provider.id)}
+      <small>${provider.configured ? "已配置" : "未配置"}</small>
+    </span>`).join("");
+}
+
+function providerId(model) {
+  const prefix = String(model || "").split("/")[0];
+  return ["minimax", "volcengine", "mock"].includes(prefix) ? prefix : "other";
+}
+
+function providerLabel(id) {
+  return providers.find((provider) => provider.id === id)?.label
+    || ({ minimax: "MiniMax", volcengine: "火山引擎", mock: "LLM Mock", other: "其他模型" }[id] || id);
+}
+
+function displayModel(model) {
+  const id = providerId(model);
+  return id === "other" || id === "mock" ? model : String(model).slice(String(model).indexOf("/") + 1);
+}
+
 function fillSelect(sel, val) {
   if (!sel) return;
   sel.innerHTML = "";
-  const opt = (m) => { const o = document.createElement("option"); o.value = m; o.textContent = m; return o; };
-  if (rec.length) { const g = document.createElement("optgroup"); g.label = "推荐"; rec.forEach((m) => g.appendChild(opt(m))); sel.appendChild(g); }
-  const rest = all.filter((m) => !rec.includes(m));
-  if (rest.length) { const g = document.createElement("optgroup"); g.label = `全部 (${all.length})`; rest.forEach((m) => g.appendChild(opt(m))); sel.appendChild(g); }
-  if (!rec.length && !all.length && val) sel.appendChild(opt(val)); // 拿不到模型列表时至少保留当前值
+  const opt = (model) => {
+    const option = document.createElement("option");
+    option.value = model;
+    option.textContent = `${rec.includes(model) ? "★ " : ""}${displayModel(model)}`;
+    return option;
+  };
+  const choices = [...new Set([...rec, ...all])];
+  const groups = new Map();
+  for (const model of choices) {
+    const id = providerId(model);
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push(model);
+  }
+  for (const id of ["minimax", "volcengine", "other", "mock"]) {
+    const models = groups.get(id) || [];
+    if (!models.length) continue;
+    const group = document.createElement("optgroup");
+    group.label = `${providerLabel(id)} (${models.length})`;
+    models.forEach((model) => group.appendChild(opt(model)));
+    sel.appendChild(group);
+  }
+  if (val && !choices.includes(val)) {
+    const group = document.createElement("optgroup");
+    group.label = "当前配置";
+    group.appendChild(opt(val));
+    sel.prepend(group);
+  }
   if (val) sel.value = val;
-  if (!sel.value && rec.length) sel.value = rec[0];
+  if (!sel.value && choices.length) sel.value = choices[0];
 }
 
 async function save() {
@@ -59,7 +118,7 @@ async function save() {
   const msg = $("#saveMsg");
   $("#saveBtn").disabled = true; msg.className = "save-msg"; msg.textContent = "保存中…";
   try {
-    const r = await (await fetch("/api/agent-config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
+    const r = await (await fetch("api/agent-config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
     if (r.ok) { cur = r.config || body; msg.className = "save-msg ok"; msg.textContent = "✓ 已保存，新任务将使用此配置"; }
     else { msg.className = "save-msg err"; msg.textContent = "保存失败"; }
   } catch { msg.className = "save-msg err"; msg.textContent = "保存失败（网络错误）"; }

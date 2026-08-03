@@ -9,7 +9,7 @@ const key = new URLSearchParams(location.search).get("key");
 async function init() {
   if (!key) { $("#agentTagline").textContent = "缺少 key 参数"; return; }
   let d;
-  try { d = await (await fetch(`/api/agent/${encodeURIComponent(key)}`)).json(); }
+  try { d = await (await fetch(`api/agent/${encodeURIComponent(key)}`)).json(); }
   catch { $("#agentTagline").textContent = "加载失败"; return; }
   if (!d || d.error) { $("#agentTagline").textContent = d && d.error ? d.error : "未找到该 Agent"; return; }
 

@@ -1,7 +1,7 @@
 // 前端 Agent 花名册（首页卡片 / 配置页 / 工作区 @ 提及下拉 共用）。
 // 后端 server/domain/roster.js 是权威真相源，/api/agents 亦由其派生；此处仅为零构建前端
 // 提供一份轻量镜像（key/icon/name/tagline/kind），避免首页/配置页各自硬编码同一份清单。
-// 新增 Agent 时：先在后端 roster.js 登记 + 建 space 目录，然后在此处补一行镜像即可。
+// 启动时会通过 /api/agents 用后端花名册刷新本镜像；静态清单仅作为离线回退。
 "use strict";
 const AGENT_ROSTER = [
   { key: "twin",          kind: "twin", icon: "◆", name: "Twin · 数字分身",   tagline: "用户的代理人 / 唯一编排者" },
@@ -20,3 +20,38 @@ const AGENT_ROSTER = [
 const AGENT_KEYS = AGENT_ROSTER.map((a) => a.key);
 // 派生：key → { name, icon }（用于事件渲染时把 actor=xxx 翻译成可读名 + 头像）
 const AGENT_META = Object.fromEntries(AGENT_ROSTER.map((a) => [a.key, { name: a.name, icon: a.icon }]));
+
+// 原地更新导出的 const 容器，让已经引用 AGENT_ROSTER / AGENT_KEYS / AGENT_META
+// 的 classic script 都能立刻看到运行时新增的自定义 Agent。
+function replaceAgentRoster(agents) {
+  if (!Array.isArray(agents) || !agents.length) return false;
+  const normalized = agents
+    .filter((a) => a && typeof a.key === "string" && typeof a.name === "string")
+    .map((a) => ({
+      key: a.key,
+      kind: a.kind === "twin" ? "twin" : "tool",
+      icon: a.icon || "🤖",
+      name: a.name,
+      tagline: a.tagline || "自定义协作 Agent",
+      custom: !!a.custom,
+      capabilities: Array.isArray(a.capabilities) ? a.capabilities : [],
+    }));
+  if (!normalized.length) return false;
+
+  AGENT_ROSTER.splice(0, AGENT_ROSTER.length, ...normalized);
+  AGENT_KEYS.splice(0, AGENT_KEYS.length, ...normalized.map((a) => a.key));
+  Object.keys(AGENT_META).forEach((key) => { delete AGENT_META[key]; });
+  normalized.forEach((a) => { AGENT_META[a.key] = { name: a.name, icon: a.icon }; });
+  return true;
+}
+
+async function refreshAgentRoster() {
+  try {
+    const response = await fetch("api/agents");
+    if (!response.ok) return false;
+    const body = await response.json();
+    return replaceAgentRoster(body.agents);
+  } catch {
+    return false;
+  }
+}

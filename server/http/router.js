@@ -3,6 +3,7 @@
 //   GET  /api/health              → {hasKey, models, dataQuery, sandbox}
 //   GET  /api/models              → {recommended, all, defaults}  供前端为各 Agent 选模型
 //   GET  /api/agents              → 全部 Agent 概要
+//   POST /api/agents              → 新增自定义 Agent（运行时立即生效）
 //   GET  /api/agent/:key          → 单个 Agent 详情 + 关联文件
 //   GET  /api/agent-config        → 读当前模型配置（记忆，按 Agent key 的映射）
 //   POST /api/agent-config        → 保存模型配置（任意数量 Agent）
@@ -27,14 +28,16 @@
 //   GET  /api/risk-config         → 读取风险分级矩阵配置
 //   POST /api/risk-config         → 保存风险分级矩阵配置
 //   POST /api/task/:tid/feedback  → 对 Twin 决策的反馈（用于信任校准）
-import { CONFIG, RECOMMENDED_MODELS } from "../config.js";
-import { hasKey, listModels, llmBackend } from "../integrations/llm.js";
+import { CONFIG, RECOMMENDED_MODELS, MODEL_NOTES } from "../config.js";
+import { hasKey, listModels, llmBackend, providerStatus } from "../integrations/llm.js";
 import { hasRealBackend } from "../integrations/data-query.js";
 import { isSandboxEnabled } from "../integrations/sandbox.js";
 import { createTask, getMeta, updateMeta, readEvents, readDecisions, readThinking, summarizeUsage, listTasks, getAgentConfig, saveAgentConfig, getTaskBundle, appendFeedback } from "../domain/store.js";
 import { getAgentList, getAgentDetail } from "../domain/agents.js";
 import { buildModelChoices } from "../domain/models.js";
-import { ROSTER, isToolAgentKey, defaultModelFor, getDispatchableAgents, AGENT_KEYS } from "../domain/roster.js";
+import { ROSTER, isToolAgentKey, defaultModelFor, getDispatchableAgents, AGENT_KEYS, getRosterEntry, refreshRoster } from "../domain/roster.js";
+import { createCustomAgent, normalizeCustomAgentKey } from "../domain/custom-agents.js";
+import { normalizeParticipants } from "../domain/participants.js";
 import { runTwinInquiry } from "../engine/orchestrator.js";
 import { rt, peek, ssePush, enqueueInjection, startOrchestration } from "./runtime.js";
 import { serveStatic } from "./static.js";
@@ -64,7 +67,12 @@ function resolvedConfigMap() {
   // Mock 模式必须完整隔离真实网关配置，避免本地已保存的模型名污染离线测试。
   const saved = llmBackend() === "mock" ? {} : (getAgentConfig() || {});
   const out = {};
-  for (const a of ROSTER) out[a.key] = saved[a.key] || CONFIG.models[a.key] || defaultModelFor(a.key);
+  for (const a of ROSTER) {
+    const remembered = String(saved[a.key] || "").trim();
+    out[a.key] = (remembered && !remembered.startsWith("mock/"))
+      ? remembered
+      : CONFIG.models[a.key] || defaultModelFor(a.key);
+  }
   return out;
 }
 
@@ -76,6 +84,7 @@ export async function handleRequest(req, res) {
     return sendJson(res, 200, {
       hasKey: hasKey(),
       llm: { backend: llmBackend() },
+      providers: providerStatus(),
       models: resolvedConfigMap(),
       dataQuery: { backend: CONFIG.dataQuery.backend, real: hasRealBackend() },
       sandbox: { enabled: isSandboxEnabled() },
@@ -91,12 +100,36 @@ export async function handleRequest(req, res) {
     return sendJson(res, 200, {
       recommended: llmBackend() === "mock" ? ["mock/magictwin"] : (preferred.length ? preferred : all.slice(0, 8)),
       all: llmBackend() === "mock" ? ["mock/magictwin"] : buildModelChoices(all, pinned),
-      defaults
+      defaults,
+      providers: providerStatus(),
+      notes: MODEL_NOTES,
     });
   }
   // Agent 详情：概览列表 + 单个 Agent 的元信息与关联文件（人设 Prompt / 知识库 / 技能包）
   if (path === "/api/agents" && method === "GET") {
     return sendJson(res, 200, { agents: getAgentList() });
+  }
+  if (path === "/api/agents" && method === "POST") {
+    const body = await readBody(req);
+    const name = String(body.name || "").trim();
+    if (!name) return sendJson(res, 400, { error: "Agent 名称不能为空" });
+    const key = normalizeCustomAgentKey(body.key);
+    if (getRosterEntry(key)) return sendJson(res, 409, { error: `Agent 标识 ${key} 已存在` });
+    try {
+      const created = createCustomAgent({
+        key,
+        name,
+        icon: body.icon,
+        tagline: body.tagline,
+        role: body.role,
+        capabilities: body.capabilities,
+      });
+      refreshRoster();
+      const agent = getAgentList().find((item) => item.key === created.key);
+      return sendJson(res, 201, { ok: true, agent, agents: getAgentList() });
+    } catch (error) {
+      return sendJson(res, 400, { error: error.message || "新增 Agent 失败" });
+    }
   }
   const mAgent = path.match(/^\/api\/agent\/([^/]+)$/);
   if (mAgent && method === "GET") {
@@ -138,7 +171,21 @@ export async function handleRequest(req, res) {
       ? [...new Set(body.team)].filter((k) => typeof k === "string" && k !== "twin" && dispatchable.has(k))
       : [];
     const mode = (body.mode === "discussion" || body.mode === "roundtable") ? "discussion" : "task";
-    const meta = createTask(goal, models, team, mode);
+    let participants = [];
+    if (Array.isArray(body.participants)) {
+      try {
+        const availableModels = new Set(await listModels());
+        participants = normalizeParticipants(body.participants, { dispatchable, availableModels, models });
+      } catch (error) {
+        return sendJson(res, 400, { error: error.message || "讨论分身配置无效" });
+      }
+      if (!participants.length) return sendJson(res, 400, { error: "请至少添加 1 个讨论分身" });
+      for (const participant of participants) models[participant.id] = participant.model;
+    }
+    const participantTeam = participants.length
+      ? [...new Set(participants.map((participant) => participant.agentKey))]
+      : team;
+    const meta = createTask(goal, models, participantTeam, mode, participants);
     rt(meta.tid).fresh = true; // 仅本进程新建的任务才允许启动编排
     return sendJson(res, 200, { tid: meta.tid });
   }
@@ -182,7 +229,9 @@ export async function handleRequest(req, res) {
     const body = await readBody(req);
     const text = (body.text || "").trim();
     if (!text) return sendJson(res, 400, { error: "text 不能为空" });
-    const to = (body.to === "twin" || isToolAgentKey(body.to)) ? body.to : "twin";
+    const meta = getMeta(tid);
+    const participantIds = new Set((meta?.participants || []).map((participant) => participant.id));
+    const to = (body.to === "twin" || participantIds.has(body.to) || isToolAgentKey(body.to)) ? body.to : "twin";
     const r = peek(tid);
     if (!r || !r.started) return sendJson(res, 409, { error: "任务未在运行" });
     enqueueInjection(tid, { kind: "inject", to, text });

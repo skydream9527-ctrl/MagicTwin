@@ -250,9 +250,19 @@ const BASE_ROSTER = [
   },
 ];
 
-export const ROSTER = [...BASE_ROSTER, ...getCustomAgentSpecs()];
+export const ROSTER = [];
+export const AGENT_KEYS = [];
 
-export const AGENT_KEYS = ROSTER.map((a) => a.key);
+// 自定义 Agent 可以在服务运行期间新增。原地刷新数组，确保所有已经 import 的模块
+// 都能看到同一个最新花名册，而不需要重启 Node 进程。
+export function refreshRoster() {
+  const merged = [...BASE_ROSTER, ...getCustomAgentSpecs()];
+  ROSTER.splice(0, ROSTER.length, ...merged);
+  AGENT_KEYS.splice(0, AGENT_KEYS.length, ...merged.map((a) => a.key));
+  return ROSTER;
+}
+
+refreshRoster();
 
 export function getRosterEntry(key) {
   return ROSTER.find((a) => a.key === key) || null;

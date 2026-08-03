@@ -12,26 +12,44 @@ const STARTERS = [
 // @ 提及展示用的名称：从 roster 派生，外加 "user"（你）这个虚拟 target
 const TARGET_FULL = Object.fromEntries(AGENT_ROSTER.map((a) => [a.key, a.name]));
 TARGET_FULL.user = "你";
+function syncTargetNames() {
+  Object.keys(TARGET_FULL).forEach((key) => { if (key !== "user") delete TARGET_FULL[key]; });
+  AGENT_ROSTER.forEach((a) => { TARGET_FULL[a.key] = a.name; });
+  curParticipants.forEach((participant) => { TARGET_FULL[participant.id] = participant.name; });
+}
 function atTag(to) { return `<span class="at ${to}">@${esc(TARGET_FULL[to] || to)}</span>`; }
 const ARROW = `<span class="arrow">→</span>`;
+const TEAM_STORAGE_KEY = "magictwin.selected-team.v1";
+const PARTICIPANT_STORAGE_KEY = "magictwin.discussion-participants.v1";
 
 let es = null;
 let curTid = null;
 let curMode = "discussion";
 let curTeam = [...DISCUSSION_TEAM];
+let curParticipants = [];
 let curUsage = null;
 let usageRefreshTimer = null;
+let selectedTeam = new Set(DISCUSSION_TEAM);
+let selectedParticipants = [];
+let agentNoticeTimer = null;
 // 当前任务的模型映射，键为 agent key（任意 roster 中的 Agent 都可能出现）
 let curModels = {};
 const pendingEcho = []; // 本地已乐观回显、等待服务端事件去重的插话 {to,text}
 
 // 记忆的 Agent 模型配置（来自 /api/agent-config，可在配置页修改）
 let curConfig = {};
+let availableModels = [];
+let modelNotes = {};
+let modelProviders = [];
 
 // ---------- 初始化 ----------
 async function init() {
+  await refreshAgentRoster();
+  syncTargetNames();
+  restoreSelectedTeam();
+
   try {
-    const h = await (await fetch("/api/health")).json();
+    const h = await (await fetch("api/health")).json();
     const isMock = h.llm?.backend === "mock";
     const m = $("#healthLLM");
     m.textContent = isMock ? "LLM Mock" : h.hasKey ? "LLM 已连接" : "LLM 未配置";
@@ -44,7 +62,7 @@ async function init() {
   $("#startBtn").onclick = start;
   $("#newTaskBtn").onclick = () => location.reload();
   $("#artifactsBtn").onclick = () => showDetailsDrawer("artifacts");
-  $("#artifactsOpenFull").onclick = () => { if (curTid) window.open(`/artifacts.html?tid=${curTid}`, "_blank"); };
+  $("#artifactsOpenFull").onclick = () => { if (curTid) window.open(`artifacts.html?tid=${curTid}`, "_blank"); };
   $("#tokenUsageChip").onclick = () => { showDetailsDrawer("usage"); refreshUsage(); };
 
   // 主对话区 @ 提及插话
@@ -63,28 +81,36 @@ async function init() {
   $("#sideInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doInquiry(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDetailsDrawer(); });
   initDrawerInteraction();
+  initAgentDialog();
 
-  renderHomeAgents();
-  renderUseModelsChips();   // 「本次使用」chips：从 roster 动态生成
-  renderInjectTarget();     // @ 提及下拉：从 roster 动态生成
   await loadAgentConfig();
+  restoreParticipants();
+  syncParticipantsWithTeam();
+  refreshTeamUi();          // 团队卡片 + 分身 + 当前选择模型
+  renderInjectTarget();     // @ 提及下拉：从 roster / 当前分身动态生成
   loadHistory();
 }
 
 // 渲染首页「本次使用」模型 chips（动态从 roster 派生，避免硬编码 twin/data/style）
 function renderUseModelsChips() {
   const box = $("#useModels"); if (!box) return;
-  const activeKeys = new Set(["twin", ...DISCUSSION_TEAM]);
-  box.innerHTML = AGENT_ROSTER.filter((a) => activeKeys.has(a.key)).map((a) =>
-    `<span class="um-chip" id="um-${a.key}" title="${esc(a.name)} · 当前模型">${esc(shortName(a.name))} …</span>`
+  const twin = AGENT_META.twin;
+  const twinChip = `<span class="um-chip" id="um-twin" title="Twin · 当前模型">Twin · ${esc(shortModel(curConfig.twin))}</span>`;
+  const participantChips = selectedParticipants.map((participant) =>
+    `<span class="um-chip" title="${esc(participant.name)} · ${esc(participant.model)}">${esc(participant.name)}</span>`
   ).join("");
+  box.innerHTML = twinChip + participantChips;
 }
 // 渲染工作区 @ 提及下拉（动态从 roster 派生）
 function renderInjectTarget() {
   const sel = $("#injectTarget"); if (!sel) return;
-  sel.innerHTML = AGENT_ROSTER.map((a) =>
-    `<option value="${a.key}">@ ${esc(a.name)}</option>`
-  ).join("");
+  if (curParticipants.length) {
+    sel.innerHTML = [`<option value="twin">@ Twin · 数字分身</option>`, ...curParticipants.map((participant) =>
+      `<option value="${esc(participant.id)}">@ ${esc(participant.name)} · ${esc(shortModel(participant.model))}</option>`
+    )].join("");
+  } else {
+    sel.innerHTML = AGENT_ROSTER.map((a) => `<option value="${a.key}">@ ${esc(a.name)}</option>`).join("");
+  }
 }
 // 短名：去掉「Agent」/「· 数字分身」之类后缀，让 chip 文字更紧凑
 function shortName(name) {
@@ -94,32 +120,334 @@ function shortName(name) {
 // 读取记忆的 Agent 模型配置，回填新任务区「本次使用」与首页 Agent 卡片
 async function loadAgentConfig() {
   try {
-    const c = await (await fetch("/api/agent-config")).json();
+    const [c, catalog] = await Promise.all([
+      fetch("api/agent-config").then((response) => response.json()),
+      fetch("api/models").then((response) => response.json()),
+    ]);
     // 后端返回 { config: {<key>:<model>}, keys: [...] }；兼容旧版直接平铺返回
     curConfig = { ...(c.config || c) };
+    availableModels = Array.isArray(catalog.all) ? catalog.all : [];
+    modelNotes = catalog.notes || {};
+    modelProviders = Array.isArray(catalog.providers) ? catalog.providers : [];
   } catch {}
   // 回填首页 chips
   AGENT_KEYS.forEach((k) => {
-    const chip = $("#um-" + k); if (chip) chip.textContent = `${shortName(AGENT_META[k].name)} · ${shortModel(curConfig[k])}`;
+    const chip = $("#um-" + k); if (chip && AGENT_META[k]) chip.textContent = `${shortName(AGENT_META[k].name)} · ${shortModel(curConfig[k])}`;
     const mdl = $("#ha-mdl-" + k); if (mdl) mdl.textContent = curConfig[k] || "默认";
   });
 }
 function shortModel(m) { if (!m) return "默认"; const i = m.indexOf("/"); return i >= 0 ? m.slice(i + 1) : m; }
 
-// 首页「你的 Agent 团队」卡片（点击进入详情页）
+function selectedTeamKeys() {
+  return AGENT_ROSTER.filter((a) => a.kind === "tool" && selectedTeam.has(a.key)).map((a) => a.key);
+}
+
+function restoreSelectedTeam() {
+  const valid = new Set(AGENT_ROSTER.filter((a) => a.kind === "tool").map((a) => a.key));
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(TEAM_STORAGE_KEY) || "null"); } catch {}
+  const source = Array.isArray(saved) ? saved : DISCUSSION_TEAM;
+  selectedTeam = new Set(source.filter((key) => valid.has(key)));
+}
+
+function persistSelectedTeam() {
+  try { localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(selectedTeamKeys())); } catch {}
+}
+
+function participantId(agentKey) {
+  const random = Math.random().toString(36).slice(2, 7);
+  return `p-${agentKey}-${Date.now().toString(36)}-${random}`.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+}
+
+function participantDefaultName(agentKey, model, ordinal = 1) {
+  const agent = AGENT_META[agentKey] || { name: agentKey };
+  return `${shortName(agent.name)} · ${shortModel(model)}${ordinal > 1 ? ` #${ordinal}` : ""}`;
+}
+
+function validParticipantModel(model, agentKey) {
+  if (model && (!availableModels.length || availableModels.includes(model))) return model;
+  const fallback = curConfig[agentKey];
+  return fallback && (!availableModels.length || availableModels.includes(fallback))
+    ? fallback
+    : (availableModels[0] || fallback || "mock/magictwin");
+}
+
+function makeParticipant(agentKey, model = "") {
+  const sameCount = selectedParticipants.filter((item) => item.agentKey === agentKey).length;
+  const chosen = validParticipantModel(model, agentKey);
+  return {
+    id: participantId(agentKey),
+    agentKey,
+    model: chosen,
+    name: participantDefaultName(agentKey, chosen, sameCount + 1),
+    autoName: true,
+  };
+}
+
+function restoreParticipants() {
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(PARTICIPANT_STORAGE_KEY) || "[]"); } catch {}
+  const validAgents = new Set(AGENT_ROSTER.filter((agent) => agent.kind === "tool").map((agent) => agent.key));
+  const used = new Set();
+  selectedParticipants = (Array.isArray(saved) ? saved : []).filter((item) => {
+    if (!item || !validAgents.has(item.agentKey) || used.has(item.id)) return false;
+    used.add(item.id);
+    return true;
+  }).map((item) => ({
+    id: item.id || participantId(item.agentKey),
+    agentKey: item.agentKey,
+    model: validParticipantModel(item.model, item.agentKey),
+    name: String(item.name || "").trim() || participantDefaultName(item.agentKey, validParticipantModel(item.model, item.agentKey)),
+    autoName: item.autoName !== false,
+  }));
+}
+
+function persistParticipants() {
+  try { localStorage.setItem(PARTICIPANT_STORAGE_KEY, JSON.stringify(selectedParticipants)); } catch {}
+}
+
+function syncParticipantsWithTeam() {
+  const active = new Set(selectedTeamKeys());
+  selectedParticipants = selectedParticipants.filter((item) => active.has(item.agentKey));
+  for (const agentKey of active) {
+    if (!selectedParticipants.some((item) => item.agentKey === agentKey)) selectedParticipants.push(makeParticipant(agentKey));
+  }
+  persistParticipants();
+}
+
+function cloneAgentParticipant(agentKey, sourceId = "") {
+  if (!selectedTeam.has(agentKey)) selectedTeam.add(agentKey);
+  const source = selectedParticipants.find((item) => item.id === sourceId);
+  selectedParticipants.push(makeParticipant(agentKey, source?.model || curConfig[agentKey]));
+  persistSelectedTeam();
+  persistParticipants();
+  refreshTeamUi();
+}
+
+function removeParticipant(id) {
+  const participant = selectedParticipants.find((item) => item.id === id);
+  if (!participant) return;
+  selectedParticipants = selectedParticipants.filter((item) => item.id !== id);
+  if (!selectedParticipants.some((item) => item.agentKey === participant.agentKey)) selectedTeam.delete(participant.agentKey);
+  persistSelectedTeam();
+  persistParticipants();
+  refreshTeamUi();
+}
+
+function modelOptions(selected) {
+  const labels = Object.fromEntries(modelProviders.map((provider) => [provider.id, provider.label]));
+  const groups = new Map();
+  for (const model of availableModels) {
+    const slash = model.indexOf("/");
+    const provider = slash > 0 ? model.slice(0, slash) : "other";
+    if (!groups.has(provider)) groups.set(provider, []);
+    groups.get(provider).push(model);
+  }
+  return [...groups.entries()].map(([provider, models]) =>
+    `<optgroup label="${esc(labels[provider] || provider)}">${models.map((model) => {
+      const note = modelNotes[model] ? ` · ${modelNotes[model]}` : "";
+      return `<option value="${esc(model)}"${model === selected ? " selected" : ""}>${esc(shortModel(model) + note)}</option>`;
+    }).join("")}</optgroup>`
+  ).join("");
+}
+
+function renderParticipantPanel() {
+  const box = $("#participantList"); if (!box) return;
+  if (!selectedParticipants.length) {
+    box.innerHTML = `<div class="participant-empty">先在上方选择 Agent，再为每个分身配置模型。</div>`;
+    return;
+  }
+  box.innerHTML = selectedParticipants.map((participant) => {
+    const agent = AGENT_META[participant.agentKey] || { name: participant.agentKey, icon: "■" };
+    return `<div class="participant-row" data-participant="${esc(participant.id)}">
+      <div class="participant-identity">
+        <span class="avatar ${esc(participant.agentKey)}">${esc(agent.icon)}</span>
+        <span class="participant-name-wrap">
+          <input class="participant-name" data-participant-name="${esc(participant.id)}" maxlength="80" value="${esc(participant.name)}" aria-label="分身名称" />
+          <small>人设：${esc(agent.name)}</small>
+        </span>
+      </div>
+      <select class="participant-model" data-participant-model="${esc(participant.id)}" aria-label="${esc(participant.name)} 使用的模型">${modelOptions(participant.model)}</select>
+      <span class="participant-actions">
+        <button type="button" data-clone-participant="${esc(participant.id)}">复制</button>
+        <button type="button" class="participant-remove" data-remove-participant="${esc(participant.id)}">删除</button>
+      </span>
+    </div>`;
+  }).join("");
+  box.querySelectorAll("[data-participant-name]").forEach((input) => {
+    input.onchange = () => {
+      const participant = selectedParticipants.find((item) => item.id === input.dataset.participantName);
+      if (!participant) return;
+      participant.name = input.value.trim() || participantDefaultName(participant.agentKey, participant.model);
+      participant.autoName = false;
+      input.value = participant.name;
+      persistParticipants();
+    };
+  });
+  box.querySelectorAll("[data-participant-model]").forEach((select) => {
+    select.onchange = () => {
+      const participant = selectedParticipants.find((item) => item.id === select.dataset.participantModel);
+      if (!participant) return;
+      participant.model = select.value;
+      if (participant.autoName !== false) participant.name = participantDefaultName(participant.agentKey, participant.model, selectedParticipants.filter((item) => item.agentKey === participant.agentKey).indexOf(participant) + 1);
+      persistParticipants();
+      renderParticipantPanel();
+      renderUseModelsChips();
+    };
+  });
+  box.querySelectorAll("[data-clone-participant]").forEach((button) => {
+    button.onclick = () => {
+      const source = selectedParticipants.find((item) => item.id === button.dataset.cloneParticipant);
+      if (source) cloneAgentParticipant(source.agentKey, source.id);
+    };
+  });
+  box.querySelectorAll("[data-remove-participant]").forEach((button) => { button.onclick = () => removeParticipant(button.dataset.removeParticipant); });
+}
+
+function refreshTeamUi() {
+  renderHomeAgents();
+  renderParticipantPanel();
+  renderUseModelsChips();
+  const count = selectedParticipants.length;
+  const summary = $("#teamSummary");
+  if (summary) summary.textContent = count ? `已配置 ${count} 个分身 · Twin 固定主持` : "请至少配置 1 个分身";
+  const startButton = $("#startBtn");
+  if (startButton && !curTid) startButton.disabled = count === 0;
+  AGENT_KEYS.forEach((key) => {
+    const chip = $("#um-" + key);
+    if (chip && AGENT_META[key]) chip.textContent = `${shortName(AGENT_META[key].name)} · ${shortModel(curConfig[key])}`;
+    const model = $("#ha-mdl-" + key);
+    if (model) model.textContent = curConfig[key] || "默认";
+  });
+}
+
+function toggleAgentSelection(key) {
+  const agent = AGENT_ROSTER.find((item) => item.key === key);
+  if (!agent || agent.kind !== "tool") return;
+  if (selectedTeam.has(key)) {
+    selectedTeam.delete(key);
+    selectedParticipants = selectedParticipants.filter((item) => item.agentKey !== key);
+  } else {
+    selectedTeam.add(key);
+    selectedParticipants.push(makeParticipant(key));
+  }
+  persistSelectedTeam();
+  persistParticipants();
+  refreshTeamUi();
+}
+
+// 首页「你的 Agent 团队」卡片：主区域选择，右下角单独打开详情。
 function renderHomeAgents() {
   const box = $("#homeAgents"); if (!box) return;
-  box.innerHTML = AGENT_ROSTER.map((a) => `
-    <div class="home-agent" role="button" tabindex="0" title="查看 ${esc(a.name)} 的详情与相关文件" onclick="openAgent('${a.key}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openAgent('${a.key}')}">
-      <div class="ha-top"><div class="avatar ${a.key}">${a.icon}</div><div class="ha-name">${esc(a.name)}</div></div>
-      <div class="ha-tag">${esc(a.tagline)}</div>
-      <div class="ha-foot"><span class="ha-mdl" id="ha-mdl-${a.key}">默认</span><span class="ha-go">详情 ›</span></div>
-    </div>`).join("");
+  box.innerHTML = AGENT_ROSTER.map((a) => {
+    const fixed = a.kind === "twin";
+    const selected = fixed || selectedTeam.has(a.key);
+    return `
+      <article class="home-agent${selected ? " selected" : ""}${fixed ? " fixed" : ""}" data-agent-card="${a.key}">
+        <button class="ha-select" type="button" data-select-agent="${a.key}" aria-pressed="${selected}" ${fixed ? "disabled" : ""} title="${fixed ? "Twin 固定担任圆桌主持" : selected ? `取消选择 ${esc(a.name)}` : `选择 ${esc(a.name)}`}">
+          <span class="ha-top"><span class="avatar ${a.key}">${esc(a.icon)}</span><span class="ha-name">${esc(a.name)}</span><span class="ha-check" aria-hidden="true">✓</span></span>
+          <span class="ha-tag">${esc(a.tagline)}</span>
+          <span class="ha-select-foot"><span class="ha-mdl" id="ha-mdl-${a.key}">默认</span><span class="ha-state">${fixed ? "固定主持" : selected ? "已选择" : "点选加入"}</span></span>
+        </button>
+        ${fixed ? "" : `<button class="ha-clone" type="button" data-clone-agent="${a.key}" aria-label="复制 ${esc(a.name)} 为新模型分身">＋ 分身</button>`}
+        <button class="ha-detail" type="button" data-open-agent="${a.key}" aria-label="查看 ${esc(a.name)} 详情">详情 ›</button>
+      </article>`;
+  }).join("");
+  box.querySelectorAll("[data-select-agent]").forEach((button) => {
+    button.onclick = () => toggleAgentSelection(button.dataset.selectAgent);
+  });
+  box.querySelectorAll("[data-open-agent]").forEach((button) => {
+    button.onclick = () => openAgent(button.dataset.openAgent);
+  });
+  box.querySelectorAll("[data-clone-agent]").forEach((button) => {
+    button.onclick = () => cloneAgentParticipant(button.dataset.cloneAgent);
+  });
+}
+
+function showAgentNotice(message, isError = false) {
+  const notice = $("#agentNotice");
+  if (!notice) return;
+  notice.textContent = message;
+  notice.className = "agent-notice" + (isError ? " error" : "");
+  if (agentNoticeTimer) clearTimeout(agentNoticeTimer);
+  agentNoticeTimer = setTimeout(() => notice.classList.add("hidden"), 4500);
+}
+
+function closeAgentDialog() {
+  const dialog = $("#agentDialog");
+  if (dialog?.open) dialog.close();
+}
+
+function initAgentDialog() {
+  const dialog = $("#agentDialog");
+  const form = $("#agentForm");
+  if (!dialog || !form) return;
+
+  $("#addAgentBtn").onclick = () => {
+    form.reset();
+    $("#agentIcon").value = "🤖";
+    $("#agentFormError").classList.add("hidden");
+    dialog.showModal();
+    requestAnimationFrame(() => $("#agentName").focus());
+  };
+  $("#agentDialogClose").onclick = closeAgentDialog;
+  $("#agentCancelBtn").onclick = closeAgentDialog;
+  dialog.addEventListener("click", (event) => { if (event.target === dialog) closeAgentDialog(); });
+  form.addEventListener("submit", createAgent);
+}
+
+async function createAgent(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (!form.reportValidity()) return;
+  const errorBox = $("#agentFormError");
+  const saveButton = $("#agentSaveBtn");
+  errorBox.classList.add("hidden");
+  saveButton.disabled = true;
+  saveButton.textContent = "正在新增…";
+
+  const data = new FormData(form);
+  const payload = {
+    name: String(data.get("name") || "").trim(),
+    key: String(data.get("key") || "").trim(),
+    icon: String(data.get("icon") || "🤖").trim() || "🤖",
+    tagline: String(data.get("tagline") || "").trim(),
+    role: String(data.get("role") || "").trim(),
+    capabilities: data.getAll("capability"),
+  };
+
+  try {
+    const response = await fetch("api/agents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = await response.json();
+    if (!response.ok || body.error) throw new Error(body.error || "新增 Agent 失败");
+    if (!body.agent || !replaceAgentRoster(body.agents)) throw new Error("服务器没有返回最新 Agent 列表");
+
+    syncTargetNames();
+    selectedTeam.add(body.agent.key);
+    selectedParticipants.push(makeParticipant(body.agent.key));
+    persistSelectedTeam();
+    persistParticipants();
+    renderInjectTarget();
+    refreshTeamUi();
+    await loadAgentConfig();
+    closeAgentDialog();
+    showAgentNotice(`已新增并选中「${body.agent.name}」`);
+  } catch (error) {
+    errorBox.textContent = error.message || "新增 Agent 失败";
+    errorBox.classList.remove("hidden");
+  } finally {
+    saveButton.disabled = false;
+    saveButton.textContent = "新增并选中";
+  }
 }
 
 async function loadHistory() {
   try {
-    const { tasks } = await (await fetch("/api/tasks")).json();
+    const { tasks } = await (await fetch("api/tasks")).json();
     const box = $("#historyList"); box.innerHTML = "";
     if (!tasks.length) { box.appendChild(el("div", "muted", "还没有讨论，先发起一个议题吧")); return; }
     tasks.slice(0, 12).forEach((t) => {
@@ -318,36 +646,52 @@ function initDrawerInteraction() {
 async function start() {
   const goal = $("#goalInput").value.trim();
   if (!goal) return;
+  const participants = selectedParticipants.map(({ id, agentKey, name, model }) => ({ id, agentKey, name, model }));
+  const team = [...new Set(participants.map((participant) => participant.agentKey))];
+  if (!participants.length) {
+    showAgentNotice("请至少配置 1 个讨论分身再发起圆桌", true);
+    return;
+  }
   // 把当前记忆的所有 Agent 模型配置作为本次任务的模型映射传给后端
   const models = { ...curConfig };
+  participants.forEach((participant) => { models[participant.id] = participant.model; });
   $("#startBtn").disabled = true;
   try {
-    const team = [...DISCUSSION_TEAM];
-    const r = await (await fetch("/api/task", {
+    const r = await (await fetch("api/task", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ goal, models, mode: "discussion", team }),
+      body: JSON.stringify({ goal, models, mode: "discussion", team, participants }),
     })).json();
     if (r.error) { alert(r.error); $("#startBtn").disabled = false; return; }
     curModels = { ...models };
     curMode = "discussion";
     curTeam = team;
+    curParticipants = participants;
+    syncTargetNames();
     enterWorkspace(goal); connect(r.tid);
   } catch (e) { alert("启动失败：" + e.message); $("#startBtn").disabled = false; }
 }
 
 async function openTask(tid) {
-  let goal = "", models = {}, mode = "task", team = [];
+  let goal = "", models = {}, mode = "task", team = [], participants = [];
   try {
-    const d = await (await fetch(`/api/task/${tid}`)).json();
+    const d = await (await fetch(`api/task/${tid}`)).json();
     goal = d.meta?.goal || "";
     models = { ...(d.meta?.models || {}) };
     mode = d.meta?.mode || "task";
     team = Array.isArray(d.meta?.team) ? d.meta.team : [];
+    participants = Array.isArray(d.meta?.participants) ? d.meta.participants : [];
   } catch {}
   curModels = models;
   curMode = mode;
   curTeam = team;
+  curParticipants = participants.length ? participants : team.map((agentKey) => ({
+    id: agentKey,
+    agentKey,
+    name: AGENT_META[agentKey]?.name || agentKey,
+    model: models[agentKey] || curConfig[agentKey] || "",
+  }));
+  syncTargetNames();
   enterWorkspace(goal);
   connect(tid);
 }
@@ -370,18 +714,24 @@ function enterWorkspace(goal) {
   pendingEcho.length = 0;
   if (window.matchMedia("(min-width: 1180px)").matches) showDetailsDrawer("twin");
   else closeDetailsDrawer();
-  // Agent 状态条只展示本次圆桌成员；旧任务没有 team 时仍展示完整花名册。
-  const activeKeys = curTeam.length ? new Set(["twin", ...curTeam]) : null;
-  $("#agentStrip").innerHTML = AGENT_ROSTER.filter((a) => !activeKeys || activeKeys.has(a.key)).map((a) =>
-    agentCardHtml(a.key, a.icon, a.name, curModels[a.key])
-  ).join("");
+  const twin = AGENT_META.twin || { icon: "◆", name: "Twin · 数字分身" };
+  const participantCards = curParticipants.length
+    ? curParticipants.map((participant) => {
+      const base = AGENT_META[participant.agentKey] || { icon: "■", name: participant.agentKey };
+      return agentCardHtml(participant.id, base.icon, participant.name, participant.model, participant.agentKey);
+    })
+    : AGENT_ROSTER.filter((agent) => agent.kind === "tool").map((agent) => agentCardHtml(agent.key, agent.icon, agent.name, curModels[agent.key], agent.key));
+  $("#agentStrip").innerHTML = agentCardHtml("twin", twin.icon, twin.name, curModels.twin, "twin") + participantCards.join("");
+  renderInjectTarget();
 }
 // 返回首页：断开当前任务的实时连接，平滑切回启动屏并刷新历史（比整页刷新体验更好）
 function goHome() {
   if (es) { es.close(); es = null; }
   curTid = null;
   curMode = "discussion";
-  curTeam = [...DISCUSSION_TEAM];
+  curTeam = selectedTeamKeys();
+  curParticipants = [];
+  syncTargetNames();
   curUsage = null;
   if (usageRefreshTimer) { clearTimeout(usageRefreshTimer); usageRefreshTimer = null; }
   $("#workspace").classList.add("hidden");
@@ -389,23 +739,24 @@ function goHome() {
   ["homeBtn", "sideToggle", "artifactsBtn", "newTaskBtn", "tokenUsageChip"].forEach((id) => $("#" + id).classList.add("hidden"));
   closeDetailsDrawer();
   setStatus(null);
-  $("#startBtn").disabled = false;
+  refreshTeamUi();
+  renderInjectTarget();
   loadHistory();
 }
-function agentCardHtml(k, icon, name, model) {
-  return `<div class="agent-card" role="button" tabindex="0" title="查看该 Agent 的详情与相关文件" onclick="openAgent('${k}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openAgent('${k}')}"><div class="avatar ${k}">${icon}</div><div class="agent-meta"><div class="n">${name}</div><div class="s" id="st-${k}">待命</div><div class="mdl">${esc(model || "-")}</div></div><span class="card-go">详情 ›</span></div>`;
+function agentCardHtml(k, icon, name, model, agentKey = k) {
+  return `<div class="agent-card" role="button" tabindex="0" title="查看该 Agent 人设详情" onclick="openAgent('${agentKey}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openAgent('${agentKey}')}"><div class="avatar ${agentKey}">${esc(icon)}</div><div class="agent-meta"><div class="n">${esc(name)}</div><div class="s" id="st-${k}">待命</div><div class="mdl">${esc(model || "-")}</div></div><span class="card-go">详情 ›</span></div>`;
 }
 // 打开某个 Agent 的详情页（新标签：定位/职责/边界/模型 + 相关文件浏览）
-function openAgent(k) { window.open(`/agent.html?key=${encodeURIComponent(k)}`, "_blank"); }
+function openAgent(k) { window.open(`agent.html?key=${encodeURIComponent(k)}`, "_blank"); }
 function setAgentStatus(k, text, active) { const e = $("#st-" + k); if (e) { e.textContent = text; e.className = "s" + (active ? " active" : ""); } }
-function resetAgents() { AGENT_KEYS.forEach((k) => setAgentStatus(k, "待命", false)); }
+function resetAgents() { ["twin", ...curParticipants.map((participant) => participant.id), ...AGENT_KEYS].forEach((k) => setAgentStatus(k, "待命", false)); }
 
 // ---------- SSE ----------
 function connect(tid) {
   curTid = tid;
   refreshUsage();
   if (es) es.close();
-  es = new EventSource(`/api/task/${tid}/stream`);
+  es = new EventSource(`api/task/${tid}/stream`);
   es.onmessage = (ev) => {
     let d;
     try { d = JSON.parse(ev.data); } catch { return; }
@@ -445,10 +796,11 @@ function formatLatency(value) {
 function usageRows(items, type) {
   return (items || []).map((item) => {
     const key = type === "agent" ? item.actor : item.model;
+    const participant = curParticipants.find((candidate) => candidate.id === key);
     const label = type === "agent"
-      ? (AGENT_META[key]?.name || key || "未知 Agent")
+      ? (participant?.name || AGENT_META[key]?.name || key || "未知 Agent")
       : (key || "未知模型");
-    const model = type === "agent" ? (curModels[key] || "") : "";
+    const model = type === "agent" ? (participant?.model || curModels[key] || "") : "";
     return `<div class="usage-row">
       <span class="usage-row-name" title="${esc(label)}">${esc(label)}</span>
       <span class="usage-row-value">${formatTokens(item.totalTokens)}</span>
@@ -489,7 +841,7 @@ async function refreshUsage() {
   const tid = curTid;
   if (!tid) return;
   try {
-    const response = await fetch(`/api/task/${tid}/usage`, { cache: "no-store" });
+    const response = await fetch(`api/task/${tid}/usage`, { cache: "no-store" });
     if (!response.ok) return;
     const usage = await response.json();
     if (curTid !== tid) return;
@@ -524,6 +876,24 @@ function consumedByEcho(to, text) {
   return false;
 }
 
+function actorMeta(actor, event = {}) {
+  const participant = curParticipants.find((item) => item.id === actor);
+  const agentKey = event.agentKey || participant?.agentKey || actor;
+  const base = AGENT_META[agentKey] || { name: agentKey || actor, icon: "■" };
+  return {
+    ...base,
+    key: actor,
+    agentKey,
+    name: event.participantName || participant?.name || base.name || actor,
+    model: event.model || participant?.model || curModels[actor] || curModels[agentKey] || "",
+  };
+}
+
+function isToolActor(actor, event = {}) {
+  if (!actor || ["twin", "user", "system"].includes(actor)) return false;
+  return curParticipants.some((item) => item.id === actor) || AGENT_META[event.agentKey || actor]?.kind === "tool";
+}
+
 function handle(d) {
   if (d.control === "done") { setStatus(d.status); resetAgents(); if (es) es.close(); return; }
   if (d.control === "idle") { setStatus(d.status); resetAgents(); return; }
@@ -539,8 +909,8 @@ function handle(d) {
   }
 
   // 主对话区状态灯：任何 roster 中的 Agent 都更新其状态条
-  if (kind === "status" && d.transient) { if (AGENT_KEYS.includes(actor)) setAgentStatus(actor, d.text, true); return; }
-  if (AGENT_KEYS.includes(actor)) {
+  if (kind === "status" && d.transient) { if (actor === "twin" || isToolActor(actor, d)) setAgentStatus(actor, d.text, true); return; }
+  if (actor === "twin" || isToolActor(actor, d)) {
     const querying = kind === "tool_call"; // 查询/执行已发起、结果未回，该 Agent 仍在忙，别显示“待命”
     setAgentStatus(actor, querying ? "正在查询…" : "待命", querying);
   }
@@ -560,11 +930,11 @@ function handle(d) {
   if (actor === "twin" && kind === "deliver") { setStatus("已交付"); return add(deliverCard(d)); }
   if (actor === "twin" && kind === "escalate") { setStatus("待确认"); return add(escalateCard(d)); }
   // 任意工具 Agent 的 ask / tool_call / report / styled
-  if (AGENT_KEYS.includes(actor) && actor !== "twin" && kind === "ask") return add(confirmCard(d, actor));
-  if (AGENT_KEYS.includes(actor) && actor !== "twin" && kind === "tool_call") return add(toolCard(d, actor));
+  if (isToolActor(actor, d) && kind === "ask") return add(confirmCard(d, actor));
+  if (isToolActor(actor, d) && kind === "tool_call") return add(toolCard(d, actor));
   if (actor === "system" && kind === "tool_result") return attachToolResult(d);
-  if (AGENT_KEYS.includes(actor) && actor !== "twin" && kind === "report") return add(reportCard(d, actor));
-  if (AGENT_KEYS.includes(actor) && actor !== "twin" && kind === "styled") return add(styledCard(d, actor));
+  if (isToolActor(actor, d) && kind === "report") return add(reportCard(d, actor));
+  if (isToolActor(actor, d) && kind === "styled") return add(styledCard(d, actor));
   if (actor === "system") return add(sysBubble(d.text));
 }
 
@@ -585,21 +955,21 @@ function routedBubble(fromKey, icon, fromName, toKey, tagline, text) {
   return m;
 }
 function reportCard(d, actor = "data") {
-  const meta = AGENT_META[actor] || { name: actor, icon: "■" };
-  const m = el("div", `msg ${actor} report`);
+  const meta = actorMeta(actor, d);
+  const m = el("div", `msg ${meta.agentKey} report`);
   const fs = (d.findings || []).map((f) => `<li>${esc(f)}</li>`).join("");
-  m.innerHTML = `<div class="who"><span class="ava ${actor}">${meta.icon}</span>${esc(meta.name)} ${ARROW} ${atTag("twin")} · ${d.final ? "最终报告" : "阶段报告"}</div><div class="body"><b>${esc(d.summary || d.text)}</b>${fs ? `<ul>${fs}</ul>` : ""}</div>`;
+  m.innerHTML = `<div class="who"><span class="ava ${meta.agentKey}">${esc(meta.icon)}</span>${esc(meta.name)} <span class="participant-model-badge">${esc(shortModel(meta.model))}</span> ${ARROW} ${atTag("twin")} · ${d.final ? "最终报告" : "阶段报告"}</div><div class="body"><b>${esc(d.summary || d.text)}</b>${fs ? `<ul>${fs}</ul>` : ""}</div>`;
   return m;
 }
 // 记住样式优化 Agent 最近交回的排版稿，供交付卡片复用其高亮排版
 let lastStyled = null;
 function styledCard(d, actor = "style") {
   lastStyled = { title: d.title || "", summary: d.summary || "", highlights: d.highlights || [], sections: d.sections || [] };
-  const meta = AGENT_META[actor] || { name: actor, icon: "■" };
+  const meta = actorMeta(actor, d);
   const c = el("div", "card styled");
   const hls = (d.highlights || []).map((h) => `<span class="hl">${esc(h)}</span>`).join("");
   const secs = (d.sections || []).map((s) => `<div class="styled-sec"><h5>${esc(s.heading || "")}</h5><ul>${(s.bullets || []).map((b) => `<li>${esc(b)}</li>`).join("")}</ul></div>`).join("");
-  c.innerHTML = `<div class="card-h">${meta.icon} ${esc(meta.name)} ${ARROW} ${atTag("twin")} · 排版稿</div><div class="card-b">
+  c.innerHTML = `<div class="card-h">${esc(meta.icon)} ${esc(meta.name)} ${ARROW} ${atTag("twin")} · 排版稿</div><div class="card-b">
     ${d.title ? `<div class="styled-title">${esc(d.title)}</div>` : ""}
     ${d.summary ? `<div class="styled-tldr">${esc(d.summary)}</div>` : ""}
     ${hls ? `<div class="styled-highlights">${hls}</div>` : ""}
@@ -635,12 +1005,12 @@ function synthesisCard(d) {
   return card;
 }
 function confirmCard(d, actor = "data") {
-  const meta = AGENT_META[actor] || { name: actor, icon: "■" };
+  const meta = actorMeta(actor, d);
   const c = el("div", "card confirm");
   const qs = (d.questions || []).map((q) =>
     `<div class="q-item"><div class="qt">${esc(q.text)}<span class="risk ${q.risk === "high" ? "high" : "low"}">${q.risk === "high" ? "高风险" : "低风险"}</span></div>
      <div class="qo">选项：${esc((q.options || []).join(" / ") || "开放")}　推荐：${esc(q.recommendation ?? "-")}</div></div>`).join("");
-  c.innerHTML = `<div class="card-h">${meta.icon} ${esc(meta.name)} ${ARROW} ${atTag("twin")} · 抛出确认项（等代答）</div><div class="card-b">${d.text ? `<div class="muted">${esc(d.text)}</div>` : ""}${qs}</div>`;
+  c.innerHTML = `<div class="card-h">${esc(meta.icon)} ${esc(meta.name)} ${ARROW} ${atTag("twin")} · 抛出确认项（等代答）</div><div class="card-b">${d.text ? `<div class="muted">${esc(d.text)}</div>` : ""}${qs}</div>`;
   return c;
 }
 function answerCard(d) {
@@ -652,7 +1022,7 @@ function answerCard(d) {
   return c;
 }
 function toolCard(d, actor = "data") {
-  const meta = AGENT_META[actor] || { name: actor, icon: "■" };
+  const meta = actorMeta(actor, d);
   const c = el("div", "card tool"); c.dataset.name = d.name || "";
   const isCode = d.lang === "python" || (!!d.code && !d.sql);
   if (isCode) c.dataset.isCode = "1";
@@ -764,7 +1134,7 @@ async function doInject() {
   const bubble = add(injectBubble(to, text)); // 立即乐观回显，用户马上看到自己的插话
   pendingEcho.push({ to, text });
   try {
-    const res = await fetch(`/api/task/${curTid}/inject`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to, text }) });
+    const res = await fetch(`api/task/${curTid}/inject`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to, text }) });
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
       consumedByEcho(to, text); // 服务端不会回推，撤销去重占位
@@ -778,7 +1148,7 @@ async function doInject() {
   }
 }
 async function sendReply(text) {
-  try { await fetch(`/api/task/${curTid}/reply`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }); } catch {}
+  try { await fetch(`api/task/${curTid}/reply`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }); } catch {}
 }
 async function doInquiry() {
   const input = $("#sideInput"); const question = input.value.trim();
@@ -786,7 +1156,7 @@ async function doInquiry() {
   input.value = "";
   showDetailsDrawer("twin");
   try {
-    const res = await fetch(`/api/task/${curTid}/inquiry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) });
+    const res = await fetch(`api/task/${curTid}/inquiry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) });
     if (!res.ok) { const j = await res.json().catch(() => ({})); addSide("twin", `（未能送达：${esc(j.error || res.status)}）`); }
   } catch { addSide("twin", "（发送失败，网络错误）"); }
 }
@@ -810,26 +1180,26 @@ function updateControlButtons(status) {
 }
 async function pauseTask() {
   if (!curTid) return;
-  try { await fetch(`/api/task/${curTid}/pause`, { method: "POST" }); } catch {}
+  try { await fetch(`api/task/${curTid}/pause`, { method: "POST" }); } catch {}
 }
 async function resumeTask() {
   if (!curTid) return;
-  try { await fetch(`/api/task/${curTid}/resume`, { method: "POST" }); } catch {}
+  try { await fetch(`api/task/${curTid}/resume`, { method: "POST" }); } catch {}
 }
 async function abortTask() {
   if (!curTid) return;
   if (!confirm("确定终止当前任务吗？终止后无法恢复。")) return;
-  try { await fetch(`/api/task/${curTid}/abort`, { method: "POST" }); } catch {}
+  try { await fetch(`api/task/${curTid}/abort`, { method: "POST" }); } catch {}
 }
 async function downloadBundle() {
   if (!curTid) return;
-  window.open(`/api/task/${curTid}/download`, "_blank");
+  window.open(`api/task/${curTid}/download`, "_blank");
 }
 
 // ---------- 信任仪表盘 ----------
 async function showTrustDashboard() {
   try {
-    const data = await (await fetch("/api/twin/trust")).json();
+    const data = await (await fetch("api/twin/trust")).json();
     const nextReq = data.next_level ? Object.entries(data.next_level.requirements).map(([k, v]) => {
       const name = { tasks: "完成任务", approval_rate: "认可率", experience_packs: "经验包数", consecutive_clean: "连续无纠错" }[k] || k;
       const mark = v.met ? "✅" : "⬜";
@@ -863,7 +1233,7 @@ async function showRiskConfig() {
 // ---------- 经验包管理 ----------
 async function showExperiencePacks() {
   try {
-    const data = await (await fetch("/api/twin/experience")).json();
+    const data = await (await fetch("api/twin/experience")).json();
     const l2 = (data.packs || []).length;
     const l1 = (data.candidates || []).length;
     alert(`📦 经验包管理

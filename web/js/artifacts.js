@@ -11,7 +11,7 @@ async function init() {
   document.querySelectorAll(".tab").forEach((t) => t.onclick = () => switchTab(t.dataset.t));
   if (!tid) { $("#goal").textContent = "缺少 tid 参数"; return; }
   let d;
-  try { d = await (await fetch(`/api/task/${tid}`)).json(); } catch { $("#goal").textContent = "加载失败"; return; }
+  try { d = await (await fetch(`api/task/${tid}`)).json(); } catch { $("#goal").textContent = "加载失败"; return; }
   if (d.error) { $("#goal").textContent = d.error; return; }
   const meta = d.meta || {};
   $("#sub").textContent = `${tid} · Twin=${meta.models?.twin || "-"} · 数据Agent=${meta.models?.data || "-"} · 样式Agent=${meta.models?.style || "-"}`;

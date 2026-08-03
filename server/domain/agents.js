@@ -57,6 +57,7 @@ export function getAgentList() {
     tagline: a.tagline, model: modelOf(a.key),
     capabilities: a.capabilities || [],
     fileCount: (a.files || []).length,
+    custom: !!a.custom,
   }));
 }
 
@@ -68,6 +69,7 @@ export function getAgentDetail(key) {
     key: a.key, kind: a.kind, name: a.name, icon: a.icon, color: a.color, tagline: a.tagline,
     role: a.role, responsibilities: a.responsibilities, boundary: a.boundary,
     capabilities: a.capabilities || [],
+    custom: !!a.custom,
     model: modelOf(a.key),
     files: (a.files || []).map(loadFile),
   };

@@ -2,9 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -77,6 +78,9 @@ test("offline mock smoke: health, frontend assets, and full delivery", { timeout
   let output = "";
   let tid = null;
   let discussionTid = null;
+  let avatarTid = null;
+  let customTeamTid = null;
+  const customAgentsDir = await mkdtemp(join(tmpdir(), "magictwin-agents-"));
 
   const child = spawn(process.execPath, ["server/index.js"], {
     cwd: ROOT,
@@ -89,6 +93,7 @@ test("offline mock smoke: health, frontend assets, and full delivery", { timeout
       EVOLVE_ENABLED: "0",
       POST_DELIVERY_LEARNING_ENABLED: "0",
       MIRROR_AGENT_MEMORY: "0",
+      MAGICTWIN_AGENTS_DIR: customAgentsDir,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -103,6 +108,13 @@ test("offline mock smoke: health, frontend assets, and full delivery", { timeout
     if (discussionTid) {
       await rm(join(ROOT, "workspace", "tasks", discussionTid), { recursive: true, force: true });
     }
+    if (avatarTid) {
+      await rm(join(ROOT, "workspace", "tasks", avatarTid), { recursive: true, force: true });
+    }
+    if (customTeamTid) {
+      await rm(join(ROOT, "workspace", "tasks", customTeamTid), { recursive: true, force: true });
+    }
+    await rm(customAgentsDir, { recursive: true, force: true });
   });
 
   const health = await waitForHealth(baseUrl, () => output);
@@ -141,8 +153,53 @@ test("offline mock smoke: health, frontend assets, and full delivery", { timeout
   assert.match(indexHtml, /id="drawerUsagePane"/);
   assert.match(indexHtml, /id="drawerDragHandle"/);
   assert.match(indexHtml, /id="drawerResizeHandle"/);
+  assert.match(indexHtml, /id="addAgentBtn"/);
+  assert.match(indexHtml, /id="agentDialog"/);
+  assert.match(indexHtml, /id="participantList"/);
   const stylesCss = await (await fetch(`${baseUrl}/styles.css`)).text();
   assert.match(stylesCss, /\.drawer-scrim\s*\{[^}]*display:\s*none\s*!important/s);
+
+  const addAgentResponse = await fetch(`${baseUrl}/api/agents`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      key: "market-scout-smoke",
+      name: "市场侦察 Agent",
+      icon: "🔭",
+      tagline: "测试运行时新增",
+      role: "独立扫描市场信号并向 Twin 汇报。",
+      capabilities: [],
+    }),
+  });
+  assert.equal(addAgentResponse.status, 201);
+  const added = await addAgentResponse.json();
+  assert.equal(added.agent.key, "market-scout-smoke");
+  assert.equal(added.agent.custom, true);
+  assert.ok(added.agents.some((agent) => agent.key === "market-scout-smoke"));
+
+  const agentsAfterAdd = await (await fetch(`${baseUrl}/api/agents`)).json();
+  assert.ok(agentsAfterAdd.agents.some((agent) => agent.key === "market-scout-smoke"));
+
+  const duplicateAgentResponse = await fetch(`${baseUrl}/api/agents`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key: "market-scout-smoke", name: "重复 Agent", role: "不应被创建" }),
+  });
+  assert.equal(duplicateAgentResponse.status, 409);
+
+  const customTeamResponse = await fetch(`${baseUrl}/api/task`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      goal: "验证运行时新增 Agent 可以被选入团队",
+      mode: "discussion",
+      team: ["market-scout-smoke"],
+    }),
+  });
+  assert.equal(customTeamResponse.status, 200);
+  ({ tid: customTeamTid } = await customTeamResponse.json());
+  const customTeamTask = await (await fetch(`${baseUrl}/api/task/${customTeamTid}`)).json();
+  assert.deepEqual(customTeamTask.meta.team, ["market-scout-smoke"]);
 
   const createResponse = await fetch(`${baseUrl}/api/task`, {
     method: "POST",
@@ -234,4 +291,36 @@ test("offline mock smoke: health, frontend assets, and full delivery", { timeout
   assert.ok(discussionTask.usage.byAgent.some((item) => item.actor === "researcher"));
   assert.ok(discussionTask.usage.byAgent.some((item) => item.actor === "concept"));
   assert.ok(discussionTask.usage.byAgent.some((item) => item.actor === "critic"));
+
+  const avatarParticipants = [
+    { id: "research-model-a", agentKey: "researcher", name: "趋势研究 · 模型 A", model: "mock/magictwin" },
+    { id: "research-model-b", agentKey: "researcher", name: "趋势研究 · 模型 B", model: "mock/magictwin" },
+    { id: "research-model-c", agentKey: "researcher", name: "趋势研究 · 模型 C", model: "mock/magictwin" },
+    { id: "style-model-a", agentKey: "style", name: "样式优化 · 模型 A", model: "mock/magictwin" },
+  ];
+  const avatarResponse = await fetch(`${baseUrl}/api/task`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      goal: "让同一个趋势研究 Agent 的三个模型分身独立讨论",
+      mode: "discussion",
+      participants: avatarParticipants,
+      models: { twin: "mock/magictwin" },
+    }),
+  });
+  assert.equal(avatarResponse.status, 200);
+  ({ tid: avatarTid } = await avatarResponse.json());
+  const avatarController = new AbortController();
+  const avatarStream = await fetch(`${baseUrl}/api/task/${avatarTid}/stream`, { signal: avatarController.signal });
+  await readUntilDeliver(avatarStream, avatarController);
+  const avatarTask = await waitForTaskStatus(baseUrl, avatarTid, "已交付");
+  assert.equal(avatarTask.meta.participants.length, 4);
+  assert.deepEqual(avatarTask.meta.team, ["researcher", "style"]);
+  const avatarReportActors = new Set(avatarTask.events.filter((event) => event.kind === "report").map((event) => event.actor));
+  assert.ok(avatarReportActors.has("research-model-a"));
+  assert.ok(avatarReportActors.has("research-model-b"));
+  assert.ok(avatarReportActors.has("research-model-c"));
+  assert.ok(avatarTask.events.filter((event) => event.kind === "report").every((event) => event.agentKey === "researcher"));
+  assert.ok(avatarTask.usage.byAgent.some((item) => item.actor === "research-model-a"));
+  assert.ok(avatarTask.usage.byAgent.some((item) => item.actor === "research-model-b"));
 });

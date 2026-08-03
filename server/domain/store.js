@@ -25,14 +25,14 @@ export const TASKS_DIR = join(ROOT, "workspace", "tasks");
 function ensureDir(d) { mkdirSync(d, { recursive: true }); }
 function taskDir(tid) { return join(TASKS_DIR, tid); }
 
-const AGENT_MEMORY = Object.fromEntries(
-  ROSTER.map((a) => [a.key, join(ROOT, ...a.space.split("/"), "memory")])
-);
-export function agentMemoryDir(key) { return AGENT_MEMORY[key] || null; }
+export function agentMemoryDir(key) {
+  const agent = ROSTER.find((a) => a.key === key);
+  return agent ? join(ROOT, ...agent.space.split("/"), "memory") : null;
+}
 
 function mirrorToAgent(actor, file, record, tid) {
   if (process.env.MIRROR_AGENT_MEMORY === "0") return;
-  const dir = AGENT_MEMORY[actor];
+  const dir = agentMemoryDir(actor);
   if (!dir) return;
   try { ensureDir(dir); appendFileSync(join(dir, file), JSON.stringify({ ...record, tid }) + "\n"); } catch {}
 }
@@ -44,7 +44,7 @@ function newTid() {
   return `${stamp}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
-export function createTask(goal, models = {}, team = [], mode = "task") {
+export function createTask(goal, models = {}, team = [], mode = "task", participants = []) {
   const tid = newTid();
   const dir = taskDir(tid);
   ensureDir(join(dir, "sql"));
@@ -60,6 +60,7 @@ export function createTask(goal, models = {}, team = [], mode = "task") {
     updatedAt: now,
     models,
     team,
+    participants,
     seq: 0,
   };
   writeFileSync(join(dir, "meta.json"), JSON.stringify(meta, null, 2));
@@ -89,7 +90,7 @@ export function appendEvent(tid, event) {
   const full = { seq, ts: new Date().toISOString(), ...event };
   appendFileSync(join(taskDir(tid), "conversation.jsonl"), JSON.stringify(full) + "\n");
   if (meta) updateMeta(tid, { seq });
-  mirrorToAgent(full.actor, "dialogue.jsonl", full, tid);
+  mirrorToAgent(full.agentKey || full.actor, "dialogue.jsonl", full, tid);
   return full;
 }
 
@@ -144,6 +145,9 @@ export function writeState(tid, meta, decisions = []) {
   const m = meta || getMeta(tid);
   if (!m) return;
   const modelLines = ROSTER.map((a) => `${a.name}=${m.models?.[a.key] || "-"}`).join(" / ");
+  const participantLines = (m.participants || []).map((p) =>
+    `${p.name || p.id} [${p.agentKey}] = ${p.model || m.models?.[p.agentKey] || "-"}`
+  );
   const lines = [
     `# 任务状态：${m.tid}`,
     "",
@@ -153,6 +157,7 @@ export function writeState(tid, meta, decisions = []) {
     `- 更新：${m.updatedAt}`,
     `- 团队：${(m.team && m.team.length) ? m.team.join(", ") : "全部Agent"}`,
     `- 模型：${modelLines}`,
+    ...(participantLines.length ? [`- 讨论分身：${participantLines.join(" / ")}`] : []),
     "",
     "## Twin 替用户做的决定",
     ...(decisions.length ? decisions.map((d, i) => `${i + 1}. ${d.question || d.summary || ""} → ${d.answer || ""}${d.reason ? `（理由：${d.reason}）` : ""}`) : ["（暂无）"]),

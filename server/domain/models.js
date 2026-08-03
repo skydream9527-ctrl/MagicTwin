@@ -26,6 +26,7 @@ const FIRST_PARTY = {
   tencent: ["hunyuan"],
   tongyi: ["qwen", "qwq", "qvq", "tongyi"],
   vertex_ai: ["gemini", "gemma"],
+  volcengine: ["doubao", "seed"],
   volcengine_maas: ["doubao", "seed"],
   zhipuai: ["glm", "chatglm", "autoglm"],
 };

@@ -30,6 +30,11 @@ export async function mockChat({ model, messages = [] }) {
   const isConcept = roleHeader.startsWith("# 概念拆解 Agent");
   const isCritic = roleHeader.startsWith("# 批判审视 Agent");
   const isDiscussion = messages.some((m) => String(m.content || "").includes("【本次模式】多模型圆桌讨论"));
+  const transcript = messages.map((message) => String(message.content || "")).join("\n");
+  const participants = [...transcript.matchAll(/([a-z0-9_-]+)（分身名：[^；]+；人设：([a-z0-9-]+)；模型：/g)]
+    .map((match) => ({ id: match[1], agentKey: match[2] }))
+    .filter((item, index, all) => all.findIndex((candidate) => candidate.id === item.id) === index);
+  const targetForBase = (agentKey) => participants.find((item) => item.agentKey === agentKey)?.id || agentKey;
 
   if (system.includes("压缩它自己的对话上下文")) {
     return response("## 任务与目标\n离线演示任务。\n## 下一步\n继续当前编排。", model, messages);
@@ -178,7 +183,7 @@ export async function mockChat({ model, messages = [] }) {
       if (lastUser.includes("并行批次已完成")) {
         return response({
           thought: "并行返回的三种视角已齐全，由 Twin 亲自形成总结果",
-          target: "style",
+          target: targetForBase("style"),
           type: "synthesize",
           message: "我已汇总三种独立观点，接下来只需要排版。",
           synthesis: {
@@ -205,16 +210,27 @@ export async function mockChat({ model, messages = [] }) {
           },
         }, model, messages);
       }
+      const expertParticipants = participants.filter((item) => !["style", "report-writer"].includes(item.agentKey));
+      const chosen = expertParticipants.length >= 2
+        ? expertParticipants.slice(0, 6)
+        : [
+          { id: "researcher", agentKey: "researcher" },
+          { id: "concept", agentKey: "concept" },
+          { id: "critic", agentKey: "critic" },
+        ];
       return response({
         thought: "把议题拆成三个互补视角并行执行",
-        target: "researcher",
+        target: chosen[0].id,
         type: "assign_many",
         message: "并行启动趋势、概念和批判三个独立视角。",
-        assignments: [
-          { target: "researcher", message: "独立扫描议题的市场与技术趋势，区分稳定事实、合理推断和待实时核实信息。" },
-          { target: "concept", message: "独立拆解核心定义、机制、相邻概念、适用边界和评价维度。" },
-          { target: "critic", message: "独立挑战常见假设，寻找反例、失败条件、风险和可验证方法。" },
-        ],
+        assignments: chosen.map((item, index) => ({
+          target: item.id,
+          message: [
+            "独立扫描议题的市场与技术趋势，区分稳定事实、合理推断和待实时核实信息。",
+            "独立拆解核心定义、机制、相邻概念、适用边界和评价维度。",
+            "独立挑战常见假设，寻找反例、失败条件、风险和可验证方法。",
+          ][index] || "从你的独立模型视角分析议题，并明确与其他分身可能存在的分歧。",
+        })),
       }, model, messages);
     }
     if (lastUser.includes("交回排版稿")) {

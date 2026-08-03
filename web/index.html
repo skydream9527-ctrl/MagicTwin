@@ -4,14 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MagicTwin · AI 协作工作室</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="./styles.css?v=20260803-model-avatar" />
 </head>
 <body class="studio-body">
   <div class="app-shell" id="appShell">
     <aside class="app-sidebar" id="appSidebar" aria-label="工作区导航">
       <div class="sidebar-brand">
-        <a class="brand-home" href="/" aria-label="MagicTwin 首页">
+        <a class="brand-home" href="./" aria-label="MagicTwin 首页">
           <span class="brand-mark">MT</span>
           <span class="brand-copy">
             <strong>MagicTwin</strong>
@@ -27,11 +27,11 @@
         </button>
 
         <div class="sidebar-section">工作区</div>
-        <a class="sidebar-nav active" href="/">
+        <a class="sidebar-nav active" href="./">
           <span class="sidebar-glyph">◎</span>
           <span class="sidebar-nav-copy"><strong>圆桌工作台</strong><small>观察与引导 Agent</small></span>
         </a>
-        <a class="sidebar-nav" href="/config.html">
+        <a class="sidebar-nav" href="./config.html">
           <span class="sidebar-glyph">⚙</span>
           <span class="sidebar-nav-copy"><strong>模型配置</strong><small>管理每个 Agent</small></span>
         </a>
@@ -102,9 +102,21 @@
 
           <div class="home-block-h">
             <div><span class="step-index">02</span><span>Agent 团队</span></div>
-            <span class="hint">点击查看职责、边界与相关文件</span>
+            <div class="agent-team-actions">
+              <span class="hint" id="teamSummary">已选择 4 位 · Twin 固定主持</span>
+              <button class="agent-add-button" id="addAgentBtn" type="button">＋ 新增 Agent</button>
+            </div>
           </div>
+          <div class="agent-notice hidden" id="agentNotice" role="status" aria-live="polite"></div>
           <div class="home-agents" id="homeAgents"></div>
+
+          <section class="participant-builder" aria-labelledby="participantBuilderTitle">
+            <div class="participant-builder-head">
+              <div><span class="step-index">03</span><span id="participantBuilderTitle">讨论分身</span></div>
+              <span class="hint">同一 Agent 可复制多份，并为每个分身单独选择模型</span>
+            </div>
+            <div class="participant-list" id="participantList"></div>
+          </section>
         </main>
       </section>
 
@@ -174,10 +186,58 @@
     <div id="drawerResizeHandle" class="drawer-resize-handle" role="separator" aria-label="拖动调整面板大小" title="拖动调整面板大小"></div>
   </aside>
 
-  <script src="/js/shared/dom.js"></script>
-  <script src="/js/shared/markdown.js"></script>
-  <script src="/js/shared/roster.js"></script>
-  <script src="/js/shared/shell.js"></script>
-  <script src="/js/app.js"></script>
+  <dialog class="agent-dialog" id="agentDialog" aria-labelledby="agentDialogTitle">
+    <form class="agent-form" id="agentForm">
+      <div class="agent-dialog-head">
+        <div>
+          <span class="eyebrow">CUSTOM TEAMMATE</span>
+          <h2 id="agentDialogTitle">新增 Agent</h2>
+          <p>定义一个新的协作角色，保存后会自动加入并选中。</p>
+        </div>
+        <button class="icon-button" id="agentDialogClose" type="button" aria-label="关闭新增 Agent 弹窗">×</button>
+      </div>
+
+      <div class="agent-form-grid">
+        <label class="agent-field agent-field-name">
+          <span>名称 <em>必填</em></span>
+          <input id="agentName" name="name" maxlength="60" required placeholder="例如：竞品分析 Agent" />
+        </label>
+        <label class="agent-field agent-field-icon">
+          <span>图标</span>
+          <input id="agentIcon" name="icon" maxlength="8" value="🤖" aria-label="Agent 图标" />
+        </label>
+        <label class="agent-field agent-field-full">
+          <span>内部标识 <small>可选，仅限英文、数字和短横线</small></span>
+          <input id="agentKey" name="key" maxlength="32" pattern="[a-zA-Z][a-zA-Z0-9-]{1,31}" placeholder="例如：competitor-research" />
+        </label>
+        <label class="agent-field agent-field-full">
+          <span>一句话定位</span>
+          <input id="agentTagline" name="tagline" maxlength="120" placeholder="例如：追踪竞品动态并识别差异化机会" />
+        </label>
+        <label class="agent-field agent-field-full">
+          <span>职责与工作方式 <em>必填</em></span>
+          <textarea id="agentRole" name="role" rows="5" maxlength="4000" required placeholder="说明它负责什么、如何分析，以及交付什么结果。"></textarea>
+        </label>
+      </div>
+
+      <fieldset class="agent-capabilities">
+        <legend>可用能力 <small>按需选择</small></legend>
+        <label><input type="checkbox" name="capability" value="query" /> 数据查询</label>
+        <label><input type="checkbox" name="capability" value="execute" /> 代码执行</label>
+      </fieldset>
+
+      <div class="agent-form-error hidden" id="agentFormError" role="alert"></div>
+      <div class="agent-dialog-actions">
+        <button class="ghost" id="agentCancelBtn" type="button">取消</button>
+        <button class="primary" id="agentSaveBtn" type="submit">新增并选中</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="./js/shared/dom.js"></script>
+  <script src="./js/shared/markdown.js"></script>
+  <script src="./js/shared/roster.js?v=20260802-agentfix"></script>
+  <script src="./js/shared/shell.js"></script>
+  <script src="./js/app.js?v=20260803-model-avatar"></script>
 </body>
 </html>

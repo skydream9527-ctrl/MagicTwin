@@ -11,11 +11,15 @@ import { ROSTER } from "./domain/roster.js";
 function buildDefaultModels() {
   const out = {};
   const mockMode = (process.env.LLM_BACKEND || "mock").toLowerCase() === "mock";
+  const providerDefault = process.env.DEFAULT_MODEL
+    || (process.env.MINIMAX_MODELS || "").split(",").map((model) => model.trim()).filter(Boolean).map((model) => `minimax/${model.replace(/^minimax\//, "")}`)[0]
+    || (process.env.VOLCENGINE_MODELS || "").split(",").map((model) => model.trim()).filter(Boolean).map((model) => `volcengine/${model.replace(/^volcengine\//, "")}`)[0]
+    || "gpt-4o";
   for (const a of ROSTER) {
     const envKey = `${a.key.toUpperCase().replace(/-/g, "_")}_MODEL`;
     out[a.key] = mockMode
       ? "mock/magictwin"
-      : process.env[envKey] || a.defaultModel || "gpt-4o";
+      : process.env[envKey] || providerDefault || a.defaultModel || "gpt-4o";
   }
   return out;
 }
@@ -86,8 +90,31 @@ export const CONFIG = {
 
 // 推荐模型（供前端下拉优先展示）。替换为你自己网关上可用的模型。
 export const RECOMMENDED_MODELS = [
+  "minimax/MiniMax-M3",
+  "minimax/MiniMax-M2.7",
+  "minimax/MiniMax-M2.7-highspeed",
+  "volcengine/doubao-seed-2.1-turbo",
+  "volcengine/doubao-seed-2.0-code",
+  "volcengine/doubao-seed-2.0-pro",
+  "volcengine/doubao-seed-2.0-lite",
+  "volcengine/doubao-seed-code",
+  "volcengine/glm-5.2",
+  "volcengine/kimi-k2.7-code",
+  "volcengine/minimax-m3",
+  "volcengine/deepseek-v4-flash",
+  "volcengine/deepseek-v4-pro",
+  "volcengine/minimax-m2.7",
+  "volcengine/kimi-k2.6",
+  "volcengine/ark-code-latest",
   "gpt-4o",
   "gpt-4o-mini",
   "claude-sonnet-4-20250514",
   "deepseek-chat",
 ];
+
+export const MODEL_NOTES = {
+  "volcengine/doubao-seed-2.0-code": "即将下线",
+  "volcengine/doubao-seed-2.0-pro": "即将下线",
+  "volcengine/doubao-seed-code": "即将下线",
+  "volcengine/ark-code-latest": "火山 Coding Plan 自动路由最新版",
+};
