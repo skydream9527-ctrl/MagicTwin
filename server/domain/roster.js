@@ -248,6 +248,29 @@ const BASE_ROSTER = [
       { path: "workspace/agents/data-monitor/agent.md", title: "数据监控 Agent 操作手册", group: "人设 Prompt", desc: "监控 SOP + 告警格式 + 边界" },
     ],
   },
+
+  {
+    key: "ab-experiment",
+    kind: "tool",
+    capabilities: ["query"],
+    name: "AB实验分析 Agent",
+    icon: "🧪",
+    color: "experiment",
+    tagline: "AB实验显著性检验 + 效果评估",
+    space: "workspace/agents/ab-experiment",
+    role: "AB实验数据分析专家，负责检验实验效果、计算置信度、给出统计显著结论。",
+    responsibilities: [
+      "拉取实验组和对照组核心指标数据",
+      "计算指标差异、p值、置信区间",
+      "判断实验效果是否统计显著",
+      "分析实验的副作用指标和分群效果",
+      "给出实验结论建议（全量/继续/回滚）",
+    ],
+    boundary: "只做实验数据统计分析；不决定实验是否全量（价值决策给用户）；所有结论必须标注统计显著性水平。",
+    files: [
+      { path: "workspace/agents/ab-experiment/agent.md", title: "AB实验分析 Agent 操作手册", group: "人设 Prompt", desc: "显著性检验 + 置信度计算 + 实验结论协议" },
+    ],
+  },
 ];
 
 export const ROSTER = [];

@@ -86,6 +86,21 @@ export const CONFIG = {
     workspacePath: process.env.DISTILL_WORKSPACE || "",
     model: process.env.DISTILL_MODEL || process.env.TWIN_MODEL || "gpt-4o",
   },
+
+  // 讨论标准闸门（收敛规则可执行部分，判定内核在 engine/discussion.js）
+  discussion: {
+    maxRounds: Number(process.env.DISCUSSION_MAX_ROUNDS || 6),       // 总轮次上限
+    stallLimit: Number(process.env.DISCUSSION_STALL_LIMIT || 2),     // 连续空轮数判定僵局
+    sameFocusMax: Number(process.env.DISCUSSION_SAME_FOCUS_MAX || 3),// 单焦点最多讨论轮次
+    convergeAt: Number(process.env.DISCUSSION_CONVERGE_AT || 0.8),   // 预算用到80%强制收口
+    reworkLimit: Number(process.env.DISCUSSION_REWORK_LIMIT || 2),   // 同一交付物最多打回次数
+  },
+
+  // 到期回看：每个收口结论都带 review_at，到期可主动扫描复核
+  review: {
+    enabled: process.env.REVIEW_ENABLED !== "0",
+    defaultDays: Number(process.env.REVIEW_DEFAULT_DAYS || 14),
+  },
 };
 
 // 推荐模型（供前端下拉优先展示）。替换为你自己网关上可用的模型。
