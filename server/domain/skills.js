@@ -8,6 +8,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SKILLS_DIR = join(ROOT, "workspace", "skills");
 
 // —— 极简 frontmatter 解析（零依赖）——
+// 支持：--- ... --- 块内 `key: value`、多行 `- item` 列表、内联 `[a, b]`。够解析 SKILL.md 头部。
 function unquote(s) { return String(s).replace(/^['"]|['"]$/g, "").trim(); }
 
 function parseFrontmatter(text) {
@@ -83,19 +84,44 @@ export function hasSkill(id) {
 }
 
 // 注入 prompt 的「可用技能索引」：id + 一句话 + 触发词（精简，不含全文）。
-export function skillIndexText() {
-  const skills = listSkills();
-  if (!skills.length) return "";
-  const lines = skills.map((s) => {
-    const trig = (s.triggers || []).slice(0, 6).join(" / ");
-    const desc = s.description ? `：${s.description}` : (s.name && s.name !== s.id ? `：${s.name}` : "");
-    return `- \`${s.id}\`${desc}${trig ? `（触发：${trig}）` : ""}`;
-  });
-  return `# 可用技能索引（先判断是否命中，再用 read_skill 读取全文）
+//
+// 预算内降级策略（重要）：技能变多后索引会超出上下文预算。此时**绝不能整条丢掉某个技能** ——
+// id 是 `read_skill` 的唯一入口，一个技能从索引里消失就等于 Agent 完全不知道它存在。
+// 所以按「先砍触发词 → 再压缩描述 → 最后只留 id」三档降级，保证全部 id 始终在列。
+const INDEX_HEAD = `# 可用技能索引（先判断是否命中，再用 read_skill 读取全文）
 
 用法：输出 { "type":"read_skill", "skill_id":"<id>" }；需要参考资料再加 "path":"references/xxx.md"。
 
-${lines.join("\n")}`;
+`;
+
+/**
+ * @param {object} [opts]
+ *   maxChars  索引文本的字符上限（0/未给 = 不限制）
+ */
+export function skillIndexText(opts = {}) {
+  const skills = listSkills();
+  if (!skills.length) return "";
+  const budget = Number(opts.maxChars) || 0;
+
+  // level 0：完整（描述 + 触发词）；1：只留描述；2：描述截到 40 字；3：只留 id
+  const render = (level) => {
+    const lines = skills.map((s) => {
+      const fallbackName = s.name && s.name !== s.id ? s.name : "";
+      let desc = s.description || fallbackName;
+      if (level >= 3) desc = "";
+      else if (level === 2 && desc.length > 40) desc = desc.slice(0, 40) + "…";
+      const trig = level === 0 ? (s.triggers || []).slice(0, 6).join(" / ") : "";
+      return `- \`${s.id}\`${desc ? `：${desc}` : ""}${trig ? `（触发：${trig}）` : ""}`;
+    });
+    return INDEX_HEAD + lines.join("\n");
+  };
+
+  for (let level = 0; level <= 3; level++) {
+    const text = render(level);
+    if (!budget || text.length <= budget) return text;
+  }
+  // 连「只留 id」都超预算：宁可超出也保住完整 id 列表，不做截断（截断会切出半个 id，反而误导）
+  return render(3);
 }
 
 // —— 读取某技能的 SKILL.md 或其目录下参考资料（带路径穿越防护）——
