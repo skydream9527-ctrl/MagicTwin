@@ -33,6 +33,13 @@ async function init() {
     renderProviderStatus();
   } catch {}
   try { cur = await (await fetch("api/agent-config")).json(); } catch { cur = {}; }
+
+  // Restore API keys from LocalStorage
+  if ($("#keyDeepSeek")) $("#keyDeepSeek").value = localStorage.getItem("magictwin.key.deepseek") || "";
+  if ($("#keyOpenAI")) $("#keyOpenAI").value = localStorage.getItem("magictwin.key.openai") || "";
+  if ($("#keyClaude")) $("#keyClaude").value = localStorage.getItem("magictwin.key.claude") || "";
+  if ($("#endpointCustom")) $("#endpointCustom").value = localStorage.getItem("magictwin.endpoint.custom") || "";
+
   render();
   $("#saveBtn").onclick = save;
 }
@@ -114,6 +121,11 @@ function fillSelect(sel, val) {
 }
 
 async function save() {
+  if ($("#keyDeepSeek")) localStorage.setItem("magictwin.key.deepseek", $("#keyDeepSeek").value.trim());
+  if ($("#keyOpenAI")) localStorage.setItem("magictwin.key.openai", $("#keyOpenAI").value.trim());
+  if ($("#keyClaude")) localStorage.setItem("magictwin.key.claude", $("#keyClaude").value.trim());
+  if ($("#endpointCustom")) localStorage.setItem("magictwin.endpoint.custom", $("#endpointCustom").value.trim());
+
   const body = Object.fromEntries(agents.map((a) => [a.key, $("#sel-" + a.key)?.value || cur[a.key] || ""]).filter(([, model]) => model));
   const msg = $("#saveMsg");
   $("#saveBtn").disabled = true; msg.className = "save-msg"; msg.textContent = "保存中…";
