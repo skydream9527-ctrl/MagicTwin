@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>模型配置 · MagicTwin</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="./styles.css?v=20260802-models" />
+</head>
+<body class="studio-body">
+  <div class="app-shell" id="appShell">
+    <aside class="app-sidebar" id="appSidebar" aria-label="工作区导航">
+      <div class="sidebar-brand">
+        <a class="brand-home" href="./" aria-label="MagicTwin 首页">
+          <span class="brand-mark">MT</span>
+          <span class="brand-copy"><strong>MagicTwin</strong><small>AI 协作工作室</small></span>
+        </a>
+        <button class="icon-button sidebar-collapse" id="sidebarCollapse" type="button" aria-label="收起侧栏" aria-expanded="true">‹</button>
+      </div>
+      <div class="sidebar-scroll">
+        <a class="sidebar-new-task" href="./"><span>＋</span><span class="sidebar-label">建立新目标</span></a>
+        <div class="sidebar-section">工作区</div>
+        <a class="sidebar-nav" href="./">
+          <span class="sidebar-glyph">◎</span>
+          <span class="sidebar-nav-copy"><strong>协作工作室</strong><small>观察与指导 Agent</small></span>
+        </a>
+        <a class="sidebar-nav active" href="./config.html">
+          <span class="sidebar-glyph">⚙</span>
+          <span class="sidebar-nav-copy"><strong>模型配置</strong><small>管理每个 Agent</small></span>
+        </a>
+        <div class="sidebar-section">配置说明</div>
+        <div class="sidebar-note">这里的选择只影响新任务；历史任务会保留创建时的模型。</div>
+      </div>
+      <div class="sidebar-footer">
+        <span class="profile-dot">YG</span>
+        <span class="sidebar-profile"><strong>本地工作区</strong><small>配置自动保存</small></span>
+      </div>
+    </aside>
+    <button class="mobile-scrim" id="mobileScrim" type="button" aria-label="关闭导航"></button>
+
+    <div class="app-content">
+      <header class="topbar">
+        <button class="icon-button mobile-menu" id="mobileSidebarTrigger" type="button" aria-label="打开导航">☰</button>
+        <div class="brand">
+          <div>
+            <div class="title">模型配置</div>
+            <div class="subtitle">为每位 Agent 选择推理引擎</div>
+          </div>
+        </div>
+        <div class="status-area">
+          <span class="chip" id="healthLLM">LLM …</span>
+          <a class="ghost-link" href="./">返回协作室</a>
+        </div>
+      </header>
+
+      <main class="page-scroll">
+        <div class="page-column config-column">
+          <section class="page-heading">
+            <span class="eyebrow">AGENT RUNTIME</span>
+            <h1>让每位 Agent 使用合适的模型</h1>
+            <p>每位 Agent 都可以独立选择 MiniMax 或火山引擎模型。保存后，新建任务会自动使用这里的设置。</p>
+          </section>
+
+          <section class="cfg-wrap">
+            <div class="cfg-intro">
+              <span class="info-mark">i</span>
+              <span>密钥仅保存在服务器端。下拉框会按供应商分组，标有 ★ 的是推荐模型。</span>
+            </div>
+            <div id="providerStatus" class="provider-status" aria-label="LLM 供应商状态"></div>
+            <div id="cfgList" class="cfg-list"></div>
+            <div class="cfg-actions">
+              <button id="saveBtn" class="primary">保存配置</button>
+              <span id="saveMsg" class="save-msg" aria-live="polite"></span>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="./js/shared/shell.js"></script>
+  <script src="./js/config.js?v=20260802-models"></script>
+</body>
+</html>

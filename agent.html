@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent 详情 · MagicTwin</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body class="studio-body">
+  <div class="app-shell" id="appShell">
+    <aside class="app-sidebar" id="appSidebar" aria-label="工作区导航">
+      <div class="sidebar-brand">
+        <a class="brand-home" href="./" aria-label="MagicTwin 首页">
+          <span class="brand-mark">MT</span>
+          <span class="brand-copy"><strong>MagicTwin</strong><small>AI 协作工作室</small></span>
+        </a>
+        <button class="icon-button sidebar-collapse" id="sidebarCollapse" type="button" aria-label="收起侧栏" aria-expanded="true">‹</button>
+      </div>
+      <div class="sidebar-scroll">
+        <a class="sidebar-new-task" href="./"><span>＋</span><span class="sidebar-label">建立新目标</span></a>
+        <div class="sidebar-section">工作区</div>
+        <a class="sidebar-nav" href="./">
+          <span class="sidebar-glyph">◎</span>
+          <span class="sidebar-nav-copy"><strong>协作工作室</strong><small>返回当前任务</small></span>
+        </a>
+        <a class="sidebar-nav" href="./config.html">
+          <span class="sidebar-glyph">⚙</span>
+          <span class="sidebar-nav-copy"><strong>模型配置</strong><small>管理 Agent 模型</small></span>
+        </a>
+        <div class="sidebar-section">当前页面</div>
+        <div class="sidebar-nav active" aria-current="page">
+          <span class="sidebar-glyph">A</span>
+          <span class="sidebar-nav-copy"><strong>Agent 详情</strong><small>职责、边界与文件</small></span>
+        </div>
+      </div>
+      <div class="sidebar-footer">
+        <span class="profile-dot">YG</span>
+        <span class="sidebar-profile"><strong>本地工作区</strong><small>只读预览</small></span>
+      </div>
+    </aside>
+    <button class="mobile-scrim" id="mobileScrim" type="button" aria-label="关闭导航"></button>
+
+    <div class="app-content">
+      <header class="topbar">
+        <button class="icon-button mobile-menu" id="mobileSidebarTrigger" type="button" aria-label="打开导航">☰</button>
+        <span class="logo compact-logo" id="agentLogo">◆</span>
+        <div class="brand">
+          <div>
+            <div class="title" id="agentName">Agent 详情</div>
+            <div class="subtitle" id="agentTagline">加载中…</div>
+          </div>
+        </div>
+        <div class="status-area">
+          <span class="chip" id="agentModel"></span>
+          <a class="ghost-link" href="./">返回协作室</a>
+        </div>
+      </header>
+
+      <main class="agent-wrap">
+        <section class="agent-hero" id="agentHero"></section>
+        <div class="agent-files-head">
+          <div><span class="step-index">02</span><span>相关文件</span></div>
+          <span class="hint">选择文件查看人设 Prompt、知识库或技能说明</span>
+        </div>
+        <div class="agent-body">
+          <aside class="file-list" id="fileList" aria-label="相关文件"></aside>
+          <section class="file-view" id="fileView">
+            <div class="empty">选择文件查看内容</div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="./js/shared/shell.js"></script>
+  <script src="./js/agent.js"></script>
+</body>
+</html>
